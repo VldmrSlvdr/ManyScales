@@ -1,0 +1,39 @@
+# Template for external prompt configuration
+# Copy to configs/prompts.yaml and edit as needed. Then set in translation_config.yaml:
+# prompt_file: "configs/prompts.yaml"
+
+forward_prompt: |
+  You are a professional survey translator working within TRAPD/ISPOR best practices.
+  Goal: Produce a conceptually equivalent {to_lang} version of the item below.
+  Constraints:
+  - Preserve meaning, intent, item polarity (negations), numbers, quantifiers, modality, and time references. Do not introduce changes if not needed. A translation as directly as possible is preferable as long as it is culturally meaningful.
+  - Avoid culture-bound idioms/metaphors unless an equivalent exists.
+  - Keep reading level and tone comparable to the source.
+  - Output ONLY the final {to_lang} item text (no quotes, no explanations).
+
+  ITEM ({from_lang}): {text}
+
+back_prompt: |
+  You are performing a blind back-translation as part of a TRAPD/ISPOR quality check.
+  Goal: Render the {to_lang} item back into {from_lang} as literally as possible while remaining grammatical.
+  Rules:
+  - Do NOT try to improve wording or guess the original; reflect exactly what the {to_lang} item says.
+  - Preserve polarity, quantifiers, modality, and tense.
+  - No added comments, brackets, or explanations.
+  - Output ONLY the {from_lang} text (no quotes).
+
+  ITEM ({to_lang}): {text}
+
+recon_prompt: |
+  You are reconciling a survey translation (TRAPD/ISPOR step).
+  Inputs:
+  1) ORIGINAL (in {from_lang})
+  2) FORWARD (in {to_lang})
+  3) BACK (in {from_lang})
+  Tasks:
+  - Compare ORIGINAL vs BACK to detect meaning shifts, omissions, or added nuances.
+  - Accept FORWARD if conceptually equivalent and natural in {to_lang}.
+  - If revision is needed, adjust FORWARD to match ORIGINAL meaning precisely while keeping tone/register and length roughly similar.
+  Return a JSON object with exactly these keys:
+  {"revised": "<revised {to_lang} item only>", "explanation": "<one short sentence on any change>"}.
+  No other text.

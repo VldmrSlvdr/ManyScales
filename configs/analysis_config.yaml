@@ -1,0 +1,38 @@
+# Analysis Configuration
+# This file configures translation quality analysis using embeddings
+
+# === Embedding Models ===
+# List of models to use for embedding
+models:
+  - name: "labse"
+    checkpoint: "sentence-transformers/LaBSE"
+  - name: "mE5"
+    checkpoint: "intfloat/multilingual-e5-large"
+
+reference_model: "labse"  # Model to use as reference for alignment
+
+# === Distance Metric ===
+# Choose the primary distance metric for analysis
+distance_metric: "kl_half"  # Options: kl_half, euclidean, manhattan, cosine
+
+# === Data Configuration ===
+input_file: "data/sample_analysis.csv"
+# Required columns: item_id, lang, trans_type, text
+# - lang: en (English) or ja (Japanese), etc.
+# - trans_type: origin (English), llm (LLM translation), human (human translation)
+
+output_dir: "outputs"  # Directory for output files
+cache_dir: "cache/embeddings"  # Directory for caching embeddings
+
+# === Processing Parameters ===
+batch_size: 64  # Batch size for embedding generation
+device: null  # Device for computation (null=auto, "cuda", "cpu")
+seed: 42  # Random seed for reproducibility
+
+# === Statistical Analysis ===
+n_draws: 200  # Number of negative samples for quantile calculation
+
+# === Visualization ===
+create_visualizations: true  # Whether to create plots
+fig_format: "png"  # Figure format (png, pdf, svg)
+

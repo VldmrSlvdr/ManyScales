@@ -1,0 +1,46 @@
+# Translation Configuration
+# This file configures LLM-based survey item translation
+
+# === Model Configuration ===
+model: "gemini-2.5-flash"  # Model to use for translation
+# Options: gpt-4o-mini, gpt-4o, gpt-4.1, gpt-5
+# Gemini: gemini-2.5-flash, gemini-2.5-pro, gemini-2.0-flash, gemini-flash-latest
+
+temperature: 0.0  # Temperature for sampling (0 = deterministic)
+effort: "medium"  # Reasoning effort for reasoning models (low, medium, high)
+
+# === Language Configuration ===
+source_lang: "en"  # Source language code
+target_lang: "ja"  # Target language code (ja=Japanese, zh=Chinese, es=Spanish, etc.)
+
+# === API Keys ===
+# You can also set these as environment variables: OPENAI_API_KEY, GEMINI_API_KEY
+openai_api_key: "your-key-here"
+gemini_api_key: "AIzaSyC07Q2U5zcEeuuy3X3zvImVRntEdzuDtdE"
+
+# === Data Configuration ===
+input_file: "data/sample_items.csv"  # Input CSV file with columns: item_id, text
+output_file: "outputs/translations_with_back_and_recon.csv"  # Output file path
+
+# === Optional Context ===
+# context: "This is a self-esteem scale used in psychological research."
+
+# === Workflow Flags ===
+do_back: true     # If true, perform blind back-translation
+do_recon: true    # If true (and do_back), perform reconciliation
+
+# === Custom Prompts (optional overrides) ===
+# forward_prompt: |
+#   You are a professional survey translator working within TRAPD/ISPOR best practices.
+#   Goal: Produce a conceptually equivalent {to_lang} version of the item below.
+#   ...
+# back_prompt: |
+#   You are performing a blind back-translation as part of a TRAPD/ISPOR quality check.
+#   ...
+# recon_prompt: |
+#   You are reconciling a survey translation (TRAPD/ISPOR step).
+#   ...
+
+# Or provide an external prompt file (overrides inline fields if present)
+# prompt_file: "configs/prompts.yaml"
+
