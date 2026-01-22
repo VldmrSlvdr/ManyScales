@@ -112,6 +112,90 @@ class Translator:
             List of translated texts
         """
         return [self.translate(text, target_lang, context) for text in texts]
+
+    def batch_translate_llm(
+        self,
+        texts: List[str],
+        source_lang: str,
+        target_lang: str,
+        context: Optional[str] = None,
+        prompt_override: Optional[str] = None
+    ) -> List[str]:
+        """
+        Translate multiple texts in a single LLM call.
+        """
+        items_text = self._format_items_text(texts)
+        if prompt_override:
+            prompt = (
+                prompt_override.replace("{from_lang}", source_lang)
+                .replace("{to_lang}", target_lang)
+                .replace("{items_text}", items_text)
+            )
+        else:
+            prompt = self._build_batch_translation_prompt(
+                items_text=items_text,
+                source_lang=source_lang,
+                target_lang=target_lang,
+                context=context
+            )
+        response = self._call_llm(prompt)
+        return self._parse_batch_json(response, key="translation", expected_count=len(texts))
+
+    def batch_back_translate_llm(
+        self,
+        texts: List[str],
+        source_lang: str,
+        target_lang: str,
+        prompt_override: Optional[str] = None
+    ) -> List[str]:
+        """
+        Back-translate multiple texts in a single LLM call.
+        """
+        items_text = self._format_items_text(texts)
+        if prompt_override:
+            prompt = (
+                prompt_override.replace("{from_lang}", source_lang)
+                .replace("{to_lang}", target_lang)
+                .replace("{items_text}", items_text)
+            )
+        else:
+            prompt = self._build_batch_back_translation_prompt(
+                items_text=items_text,
+                source_lang=source_lang,
+                target_lang=target_lang
+            )
+        response = self._call_llm(prompt)
+        return self._parse_batch_json(response, key="back_translation", expected_count=len(texts))
+
+    def batch_reconcile_llm(
+        self,
+        originals: List[str],
+        forwards: List[str],
+        backs: List[str],
+        source_lang: str,
+        target_lang: str,
+        prompt_override: Optional[str] = None
+    ) -> List[Dict[str, str]]:
+        """
+        Reconcile multiple translations in a single LLM call.
+        """
+        if not (len(originals) == len(forwards) == len(backs)):
+            raise ValueError("originals, forwards, and backs must have same length")
+        items_text = self._format_recon_items_text(originals, forwards, backs)
+        if prompt_override:
+            prompt = (
+                prompt_override.replace("{from_lang}", source_lang)
+                .replace("{to_lang}", target_lang)
+                .replace("{items_text}", items_text)
+            )
+        else:
+            prompt = self._build_batch_reconciliation_prompt(
+                items_text=items_text,
+                source_lang=source_lang,
+                target_lang=target_lang
+            )
+        response = self._call_llm(prompt)
+        return self._parse_batch_recon_json(response, expected_count=len(originals))
     
     def _build_translation_prompt(self, text: str, target_lang: str, 
                                   context: Optional[str]) -> str:
@@ -148,6 +232,92 @@ class Translator:
             f"- Output ONLY the {source_lang} text (no quotes).",
             "",
             f"ITEM ({to_lang}): {text}",
+        ]
+        return "\n".join(lines)
+
+    def _build_batch_translation_prompt(
+        self,
+        items_text: str,
+        source_lang: str,
+        target_lang: str,
+        context: Optional[str]
+    ) -> str:
+        """Build prompt for batch forward translation."""
+        lines = [
+            "You are a professional survey translator working within TRAPD/ISPOR best practices.",
+            f"Goal: Translate ALL items from {source_lang} to {target_lang}.",
+            "Context: You are translating an entire survey instrument. Use the context of all items to inform your translations.",
+            "Constraints:",
+            "- Preserve meaning, intent, item polarity (negations), numbers, quantifiers, modality, and time references.",
+            "- Maintain consistency in terminology across all items.",
+            "- Avoid culture-bound idioms/metaphors unless an equivalent exists.",
+            "- Keep reading level and tone comparable to the source.",
+            "Output format:",
+            "- Return a JSON array with one object per item.",
+            '- Each object must have: {"item_number": N, "translation": "translated text"}',
+            "- Preserve the order of items.",
+            "- Output ONLY the JSON array, no explanations.",
+        ]
+        if context:
+            lines.extend(["", f"Context: {context}"])
+        lines.extend([
+            "",
+            f"ITEMS ({source_lang}):",
+            items_text
+        ])
+        return "\n".join(lines)
+
+    def _build_batch_back_translation_prompt(
+        self,
+        items_text: str,
+        source_lang: str,
+        target_lang: str
+    ) -> str:
+        """Build prompt for batch back translation."""
+        lines = [
+            "You are performing blind back-translation as part of a TRAPD/ISPOR quality check.",
+            f"Goal: Translate ALL items from {target_lang} back to {source_lang} as literally as possible.",
+            "Rules:",
+            "- Do NOT try to improve wording or guess the original; reflect exactly what the items say.",
+            "- Preserve polarity, quantifiers, modality, and tense.",
+            "- Maintain consistency across items.",
+            "Output format:",
+            "- Return a JSON array with one object per item.",
+            '- Each object must have: {"item_number": N, "back_translation": "back-translated text"}',
+            "- Preserve the order of items.",
+            "- Output ONLY the JSON array, no explanations.",
+            "",
+            f"ITEMS ({target_lang}):",
+            items_text
+        ]
+        return "\n".join(lines)
+
+    def _build_batch_reconciliation_prompt(
+        self,
+        items_text: str,
+        source_lang: str,
+        target_lang: str
+    ) -> str:
+        """Build prompt for batch reconciliation."""
+        lines = [
+            "You are reconciling survey translations (TRAPD/ISPOR step) for multiple items.",
+            "For each item, you will receive:",
+            f"1) ORIGINAL (in {source_lang})",
+            f"2) FORWARD (in {target_lang})",
+            f"3) BACK (in {source_lang})",
+            "Tasks:",
+            "- Compare ORIGINAL vs BACK to detect meaning shifts, omissions, or added nuances.",
+            f"- Accept FORWARD if conceptually equivalent and natural in {target_lang}.",
+            "- If revision is needed, adjust FORWARD to match ORIGINAL meaning precisely.",
+            "- Maintain consistency in terminology across all items.",
+            "Output format:",
+            "- Return a JSON array with one object per item.",
+            '- Each object must have: {"item_number": N, "revised": "revised translation", "explanation": "brief explanation of changes"}',
+            "- Preserve the order of items.",
+            "- Output ONLY the JSON array, no explanations outside the JSON.",
+            "",
+            "ITEMS:",
+            items_text
         ]
         return "\n".join(lines)
     
@@ -336,6 +506,99 @@ class Translator:
         response = re.sub(r"```\s*$", "", response)
         
         return response.strip()
+
+    def _parse_batch_json(self, response: str, key: str, expected_count: int) -> List[str]:
+        """Parse a JSON array response for batch translation/back translation."""
+        import json
+        cleaned = self._clean_response(response)
+        data = None
+        try:
+            data = json.loads(cleaned)
+        except json.JSONDecodeError:
+            start = cleaned.find("[")
+            end = cleaned.rfind("]")
+            if start != -1 and end != -1 and end > start:
+                data = json.loads(cleaned[start:end + 1])
+            else:
+                raise ValueError("Failed to parse batch JSON response")
+
+        if not isinstance(data, list):
+            raise ValueError("Batch response must be a JSON array")
+
+        results: List[Optional[str]] = [None] * expected_count
+        for item in data:
+            if not isinstance(item, dict) or "item_number" not in item or key not in item:
+                raise ValueError(f"Each item must include 'item_number' and '{key}'")
+            try:
+                idx = int(item["item_number"]) - 1
+            except (TypeError, ValueError):
+                raise ValueError("item_number must be an integer")
+            if idx < 0 or idx >= expected_count:
+                raise ValueError("item_number out of range")
+            results[idx] = str(item[key])
+
+        if any(val is None for val in results):
+            raise ValueError("Missing items in batch response")
+        return results
+
+    def _parse_batch_recon_json(self, response: str, expected_count: int) -> List[Dict[str, str]]:
+        """Parse a JSON array response for batch reconciliation."""
+        import json
+        cleaned = self._clean_response(response)
+        data = None
+        try:
+            data = json.loads(cleaned)
+        except json.JSONDecodeError:
+            start = cleaned.find("[")
+            end = cleaned.rfind("]")
+            if start != -1 and end != -1 and end > start:
+                data = json.loads(cleaned[start:end + 1])
+            else:
+                raise ValueError("Failed to parse batch JSON response")
+
+        if not isinstance(data, list):
+            raise ValueError("Batch response must be a JSON array")
+
+        results: List[Optional[Dict[str, str]]] = [None] * expected_count
+        for item in data:
+            if not isinstance(item, dict) or "item_number" not in item:
+                raise ValueError("Each item must include 'item_number'")
+            try:
+                idx = int(item["item_number"]) - 1
+            except (TypeError, ValueError):
+                raise ValueError("item_number must be an integer")
+            if idx < 0 or idx >= expected_count:
+                raise ValueError("item_number out of range")
+            revised = item.get("revised", "")
+            explanation = item.get("explanation", "")
+            results[idx] = {"revised": str(revised), "explanation": str(explanation)}
+
+        if any(val is None for val in results):
+            raise ValueError("Missing items in batch response")
+        return results
+
+    @staticmethod
+    def _format_items_text(texts: List[str]) -> str:
+        """Format items for batch prompts."""
+        return "\n".join([f"{i}. {text}" for i, text in enumerate(texts, start=1)])
+
+    @staticmethod
+    def _format_recon_items_text(
+        originals: List[str],
+        forwards: List[str],
+        backs: List[str]
+    ) -> str:
+        """Format reconciliation items for batch prompts."""
+        blocks = []
+        for i, (orig, fwd, back) in enumerate(zip(originals, forwards, backs), start=1):
+            blocks.extend([
+                f"Item {i}:",
+                f"ORIGINAL: {orig}",
+                f"FORWARD: {fwd}",
+                f"BACK: {back}",
+                ""
+            ])
+        return "\n".join(blocks).strip()
     
     def _parse_reconciliation(self, response: str) -> Dict[str, str]:
         """Parse reconciliation response."""

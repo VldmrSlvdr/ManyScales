@@ -52,9 +52,23 @@ class ConfigValidator:
             raise ValueError("do_back must be a boolean")
         if "do_recon" in config and not isinstance(config["do_recon"], bool):
             raise ValueError("do_recon must be a boolean")
+        if "batch_mode" in config and not isinstance(config["batch_mode"], bool):
+            raise ValueError("batch_mode must be a boolean")
+
+        if "batch_size" in config:
+            batch_size = config["batch_size"]
+            if not isinstance(batch_size, int) or batch_size < 1:
+                raise ValueError("batch_size must be a positive integer")
 
         # Optional custom prompts
-        for key in ["forward_prompt", "back_prompt", "recon_prompt"]:
+        for key in [
+            "forward_prompt",
+            "back_prompt",
+            "recon_prompt",
+            "batch_forward_prompt",
+            "batch_back_prompt",
+            "batch_recon_prompt"
+        ]:
             if key in config and not isinstance(config[key], str):
                 raise ValueError(f"{key} must be a string if provided")
 

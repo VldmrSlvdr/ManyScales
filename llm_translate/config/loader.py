@@ -96,7 +96,14 @@ class ConfigLoader:
 
         # Only merge known keys
         merged = config.copy()
-        for k in ["forward_prompt", "back_prompt", "recon_prompt"]:
+        for k in [
+            "forward_prompt",
+            "back_prompt",
+            "recon_prompt",
+            "batch_forward_prompt",
+            "batch_back_prompt",
+            "batch_recon_prompt"
+        ]:
             if k in prompts:
                 merged[k] = prompts[k]
         return merged
