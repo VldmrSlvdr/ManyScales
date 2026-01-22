@@ -28,6 +28,8 @@ output_file: "outputs/translations_with_back_and_recon.csv"  # Output file path
 # === Workflow Flags ===
 do_back: true     # If true, perform blind back-translation
 do_recon: true    # If true (and do_back), perform reconciliation
+batch_mode: false # If true, translate items in batches via single-call JSON
+batch_size: 20    # Items per batch when batch_mode is true
 
 # === Custom Prompts (optional overrides) ===
 # forward_prompt: |
@@ -39,6 +41,18 @@ do_recon: true    # If true (and do_back), perform reconciliation
 #   ...
 # recon_prompt: |
 #   You are reconciling a survey translation (TRAPD/ISPOR step).
+#   ...
+
+# Batch prompt overrides (used only when batch_mode is true)
+# batch_forward_prompt: |
+#   You are a professional survey translator working within TRAPD/ISPOR best practices.
+#   Goal: Translate ALL items from {from_lang} to {to_lang}.
+#   ...
+# batch_back_prompt: |
+#   You are performing blind back-translation as part of a TRAPD/ISPOR quality check.
+#   ...
+# batch_recon_prompt: |
+#   You are reconciling survey translations (TRAPD/ISPOR step) for multiple items.
 #   ...
 
 # Or provide an external prompt file (overrides inline fields if present)

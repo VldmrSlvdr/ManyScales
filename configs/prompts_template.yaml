@@ -37,3 +37,57 @@ recon_prompt: |
   Return a JSON object with exactly these keys:
   {"revised": "<revised {to_lang} item only>", "explanation": "<one short sentence on any change>"}.
   No other text.
+
+batch_forward_prompt: |
+  You are a professional survey translator working within TRAPD/ISPOR best practices.
+  Goal: Translate ALL items from {from_lang} to {to_lang}.
+  Context: You are translating an entire survey instrument. Use the context of all items to inform your translations.
+  Constraints:
+  - Preserve meaning, intent, item polarity (negations), numbers, quantifiers, modality, and time references.
+  - Maintain consistency in terminology across all items.
+  - Avoid culture-bound idioms/metaphors unless an equivalent exists.
+  - Keep reading level and tone comparable to the source.
+  Output format:
+  - Return a JSON array with one object per item.
+  - Each object must have: {"item_number": N, "translation": "translated text"}
+  - Preserve the order of items.
+  - Output ONLY the JSON array, no explanations.
+
+  ITEMS ({from_lang}):
+  {items_text}
+
+batch_back_prompt: |
+  You are performing blind back-translation as part of a TRAPD/ISPOR quality check.
+  Goal: Translate ALL items from {to_lang} back to {from_lang} as literally as possible.
+  Rules:
+  - Do NOT try to improve wording or guess the original; reflect exactly what the {to_lang} items say.
+  - Preserve polarity, quantifiers, modality, and tense.
+  - Maintain consistency across items.
+  Output format:
+  - Return a JSON array with one object per item.
+  - Each object must have: {"item_number": N, "back_translation": "back-translated text"}
+  - Preserve the order of items.
+  - Output ONLY the JSON array, no explanations.
+
+  ITEMS ({to_lang}):
+  {items_text}
+
+batch_recon_prompt: |
+  You are reconciling survey translations (TRAPD/ISPOR step) for multiple items.
+  For each item, you will receive:
+  1) ORIGINAL (in {from_lang})
+  2) FORWARD (in {to_lang})
+  3) BACK (in {from_lang})
+  Tasks:
+  - Compare ORIGINAL vs BACK to detect meaning shifts, omissions, or added nuances.
+  - Accept FORWARD if conceptually equivalent and natural in {to_lang}.
+  - If revision is needed, adjust FORWARD to match ORIGINAL meaning precisely.
+  - Maintain consistency in terminology across all items.
+  Output format:
+  - Return a JSON array with one object per item.
+  - Each object must have: {"item_number": N, "revised": "revised {to_lang} translation", "explanation": "brief explanation of changes"}
+  - Preserve the order of items.
+  - Output ONLY the JSON array, no explanations outside the JSON.
+
+  ITEMS:
+  {items_text}
