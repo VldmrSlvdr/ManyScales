@@ -1,0 +1,87 @@
+---
+title: "ManyScales 専門家調査 解析データセット作成"
+date: today
+date-format: "YYYY-MM-DD"
+format:
+  html:
+    toc: true
+    toc-depth: 4
+    toc-location: left
+    number-sections: true
+    embed-resources: true
+---
+
+```{r paths, include=FALSE}
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+```
+
+
+## 目的
+
+分析フラグを付与したデータセットに対して、分析フラグによって解析対象データになったものと、そうではないすべてを含んだデータセットに分けます。その上で、調査票 A、B、C、D、E、F に分けてデータセットを保存します。
+
+```{r}
+suppressPackageStartupMessages(suppressWarnings(library(tidyverse)))
+
+input_file <- "data/1_data_flags/ManyScales_専門_analysis_flags.tsv"
+```
+
+## データの読み込み
+
+```{r}
+data <- read_tsv(input_file)
+```
+
+## 分析用データセット
+
+以下の基準に当てはまるデータをdata_excludedと格納しています。
+
+- ，4つの適格性項目がすべて 1 であり，かつ，割り当てられたセットについて，各尺度の semantic_ai，naturalness_ai，cultural_validity_ai，choice_fit_ai のすべてに回答している場合(analysis_target==1)
+- 除外基準1(注意チェックと視覚的認知トラップ)に引っかかってない(excl1 == 0)
+
+```{r}
+data_excluded <- data |> 
+  filter(analysis_target == 1, excl1 == 0)
+
+cat("解析対象サンプルサイズ：", nrow(data_excluded), "\n")
+table(data_excluded$set_id)
+```
+
+
+## A~Fの調査票ごとのデータセットの作成
+
+A~Fの調査票ごとのデータセットの作成する関数extract_setを用意します。ここでcsvに変換もします。
+
+```{r}
+extract_set <- function(data, set = "A",
+                        prefix = "data/2_data_all/ManyScales_専門家_analysis_all") {
+  data_tmp2 <- data |>
+    filter(set_id == set) |>
+    select(
+      age, gender, gender_4_TEXT, highest_degree, trans_cond,
+      starts_with(set, ignore.case = FALSE)
+    )
+  write_csv(data_tmp2, paste0(prefix, set, ".csv"))
+  data_tmp2
+}
+```
+
+
+除外前のデータも一応"2_data_all"に保存します。
+
+
+```{r}
+for (set in c("A", "B", "C", "D", "E", "F")) {
+  extract_set(data, set = set,
+              prefix = "data/2_data_all/ManyScales_専門家_all_")
+}
+```
+
+除外後のデータを"3_data_processed"に保存します。
+
+```{r}
+for (set in c("A", "B", "C", "D", "E", "F")) {
+  extract_set(data_excluded, set = set,
+              prefix = "data/3_data_processed/ManyScales_専門家_processed_")
+}
+```

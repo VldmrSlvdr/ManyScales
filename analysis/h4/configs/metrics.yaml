@@ -1,0 +1,20 @@
+# Cosine on normalized embeddings is the primary similarity.
+# Angular distance and normalized Euclidean distance are recorded as
+# sensitivity transforms. For unit vectors they are monotone functions
+# of cosine, so they are not independent robustness checks.
+similarity:
+  primary:
+    name: cosine
+    higher_is_more_similar: true
+    independent_geometry: true
+
+  sensitivity:
+    - name: angular_distance
+      higher_is_more_similar: false
+      independent_geometry: false
+      note: Monotone transformation of cosine.
+
+    - name: euclidean_normalized
+      higher_is_more_similar: false
+      independent_geometry: false
+      note: For normalized embeddings, squared Euclidean distance equals 2(1-cosine).

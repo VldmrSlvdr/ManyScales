@@ -1,0 +1,10 @@
+citHeader("To cite LLMTranslate in publications use:")
+
+bibentry(
+  bibtype = "Manual",
+  title   = "LLMTranslate: LLM Survey Translator",
+  author  = person("Jonas R.", "Kunst"),
+  year    = "2025",
+  note    = "R package version 0.3.0",
+  url     = "https://CRAN.R-project.org/package=LLMTranslate"
+)

@@ -1,0 +1,472 @@
+---
+title: "補足分析：仮説1・3"
+subtitle: "差得点モデル・評定モデルによる感度分析"
+author: "Koji Kosugi / 小杉考司"
+date: "2026-10-31"
+lang: ja
+format:
+  html:
+    embed-resources: true
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    df-print: kable
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r}
+#| label: setup
+# ============================================================
+# パッケージ
+# ============================================================
+pacman::p_load(here, dplyr, tidyr, readr, purrr, stringr, knitr)
+
+# ============================================================
+# 置き場所(リポジトリのルートからの相対で決める。再計算はしない)
+# ============================================================
+res_dir <- here::here("supplementary", "results")
+
+# ============================================================
+# 表示用の関数
+# ============================================================
+# 小数を桁をそろえて文字列にする
+fmt <- function(x, d = 3) {
+  out <- ifelse(is.na(x), "—", formatC(x, format = "f", digits = d))
+  return(out)
+}
+# BF01 を表示する(とても小さい値は「< 0.01」)
+fmt_bf <- function(x) {
+  out <- dplyr::case_when(
+    is.na(x) ~ "—",
+    x < 0.01 ~ "< 0.01",
+    x >= 100 ~ formatC(x, format = "f", digits = 0),
+    TRUE ~ formatC(x, format = "f", digits = 2)
+  )
+  return(out)
+}
+# 平均と区間を「平均 [下限, 上限]」にする
+fmt_ci <- function(m, lo, hi, d = 3) {
+  out <- paste0(fmt(m, d), " [", fmt(lo, d), ", ", fmt(hi, d), "]")
+  return(out)
+}
+# BF の記号(o・tri・x)を ○・△・× にする
+mark_jp <- function(x) {
+  out <- dplyr::recode(x, o = "○", tri = "△", x = "×", .default = "—", .missing = "—")
+  return(out)
+}
+# HDI と ROPE の関係を日本語にする
+rope_jp <- function(x) {
+  out <- dplyr::recode(x, inside = "すっぽり含む", overlap = "一部含む", outside = "含まない",
+                       .default = "—", .missing = "—")
+  return(out)
+}
+# モデルの名前
+model_jp <- function(x) {
+  out <- dplyr::recode(x, diff = "差得点", rating = "評定")
+  return(out)
+}
+# 観点の名前
+aspect_jp <- function(x) {
+  out <- dplyr::recode(x, semantic = "意味的忠実性", naturalness = "表現の自然さ",
+                       cultural_validity = "文化的妥当性")
+  return(out)
+}
+# 探索パートの tag を日本語の見出しにする(観点の接頭辞は外してから渡す)
+xtag_jp <- function(tag) {
+  r_lab <- c(half = "1/2", one = "1", sqrt2 = "√2")
+  out <- purrr::map_chr(tag, function(t) {
+    m <- stringr::str_match(t, "^x_rscale_(diff|rating)_(half|one|sqrt2)$")
+    if (!is.na(m[1, 1])) return(paste0("r_scale = ", r_lab[[m[1, 3]]], "(", model_jp(m[1, 2]), ")"))
+    m <- stringr::str_match(t, "^x_prior_(half|double)_(diff|rating)$")
+    if (!is.na(m[1, 1])) {
+      return(paste0("分散の事前分布の幅 ", ifelse(m[1, 2] == "half", "× 1/2", "× 2"),
+                    "(", model_jp(m[1, 3]), ")"))
+    }
+    m <- stringr::str_match(t, "^x_(excl3|cvrev)_(diff|rating)$")
+    if (!is.na(m[1, 1])) {
+      lab <- c(excl3 = "除外基準3あり", cvrev = "文化的妥当性を 6 − 値 で逆転(10/07 までの扱い)")[[m[1, 2]]]
+      return(paste0(lab, "(", model_jp(m[1, 3]), ")"))
+    }
+    lab <- dplyr::case_when(
+      t == "x_lkj" ~ "尺度の切片と差の相関(LKJ, 評定)",
+      t == "x_order" ~ "先に答えた版の項(差得点)",
+      stringr::str_detect(t, "^x_ordinal") ~ "累積プロビット(brms)",
+      t == "x_person" ~ "回答者の効果あり(差得点)",
+      TRUE ~ t
+    )
+    return(lab)
+  })
+  return(out)
+}
+
+# ============================================================
+# 読み込み(保存済みの要約)
+# ============================================================
+h3_sum <- readr::read_csv(file.path(res_dir, "h3rep_main", "summary_bf_delta.csv"), show_col_types = FALSE)
+h3_sbf <- readr::read_csv(file.path(res_dir, "h3rep_main", "scale_bf.csv"), show_col_types = FALSE)
+h3_post <- readr::read_csv(file.path(res_dir, "h3rep_main", "main_scale_posteriors.csv"), show_col_types = FALSE)
+h3_conv <- readr::read_csv(file.path(res_dir, "h3rep_main", "convergence.csv"), show_col_types = FALSE)
+h3_top <- readr::read_csv(file.path(res_dir, "h3rep_main", "top_parameters.csv"), show_col_types = FALSE)
+h1_sum <- readr::read_csv(file.path(res_dir, "h1rep_main", "summary_bf_delta.csv"), show_col_types = FALSE)
+h1_sbf <- readr::read_csv(file.path(res_dir, "h1rep_main", "scale_bf.csv"), show_col_types = FALSE)
+h1_conv <- readr::read_csv(file.path(res_dir, "h1rep_main", "convergence.csv"), show_col_types = FALSE)
+h1_top <- readr::read_csv(file.path(res_dir, "h1rep_main", "top_parameters.csv"), show_col_types = FALSE)
+cmp_kun <- readr::read_csv(file.path(res_dir, "compare_kunisato", "kunisato_prior_swap.csv"), show_col_types = FALSE)
+cmp_our <- readr::read_csv(file.path(res_dir, "compare_kunisato", "ours_prior_swap.csv"), show_col_types = FALSE)
+cmp_scale <- readr::read_csv(file.path(res_dir, "compare_kunisato", "h3_scale_compare.csv"), show_col_types = FALSE)
+cmp_scale_sum <- readr::read_csv(file.path(res_dir, "compare_kunisato", "h3_scale_compare_summary.csv"), show_col_types = FALSE)
+# Approved abbreviations; original numerical scale IDs are retained.
+scale_names <- readr::read_csv(here::here("..", "scale_names.csv"),
+                               col_types = "cc") |>
+  dplyr::transmute(scale_id = as.integer(scale_id), scale_name)
+
+
+# ============================================================
+# 共通の整形
+# ============================================================
+# 主分析・探索パートの1行を表示用にする
+tidy_summary <- function(d) {
+  out <- d %>%
+    dplyr::mutate(
+      BF01 = fmt_bf(bf01),
+      `10回の範囲` = ifelse(is.na(bf01_min), "—", paste0(fmt(bf01_min, 2), "〜", fmt(bf01_max, 2))),
+      記号 = mark_jp(bf_mark),
+      `δ 事後平均値 [95% HDI]` = fmt_ci(delta_mean, delta_hdi_low, delta_hdi_high),
+      `HDI と ROPE` = rope_jp(hdi_rope),
+      `P(δ∈ROPE)` = fmt(p_rope),
+      `評定の単位の差 [95% HDI]` = ifelse(is.na(raw_mean), "—", fmt_ci(raw_mean, raw_hdi_low, raw_hdi_high))
+    )
+  return(out)
+}
+# 尺度ごとの参考記録の1セル
+scale_cell <- function(bf01, bf_mark, m, lo, hi, rope, p) {
+  out <- paste0(fmt_bf(bf01), " ", mark_jp(bf_mark), " / ", fmt_ci(m, lo, hi), " ", rope_jp(rope), " / ", fmt(p))
+  return(out)
+}
+# 主分析の収束の要約(H1・H0 の全パラメータ)
+conv_line <- function(conv, tags) {
+  d <- conv %>% dplyr::filter(tag %in% tags)
+  out <- paste0("R̂ ≤ ", fmt(max(d$max_rhat), 4), "，バルク ESS ≥ ", formatC(min(d$min_ess_bulk), format = "d", big.mark = ","),
+                "，テイル ESS ≥ ", formatC(min(d$min_ess_tail), format = "d", big.mark = ","),
+                "，発散 ", sum(d$n_divergent))
+  return(out)
+}
+```
+
+# この報告書について
+
+- 小杉が国里さんの仮説1・3の実装と結果を見ずに組んだ解析の結果を，`supplementary/results/` に保存した要約(CSV)から表にしたものです。**この報告書のレンダリングでは MCMC も BF も計算し直していません**。
+- **2026-10-30 に，OCQ(尺度 ID 8)で過去1か月チョコレートを全く食べなかった人(33 人)を除外したデータ(PR #21)で仮説3の全課題を計算し直しました**。仮説1は専門家データなので変わりません。除外前の値は `仮説3_独立再現_結果.md`(10/07 の記録)に残し，変わった点は同じ文書の末尾にまとめてあります。主分析の BF01 は 2.21→2.20(差得点)・2.24→2.19(評定)で，結論は変わりません。
+- **2026-10-31 に，仮説1の文化的妥当性の向きを訂正して計算し直しました**。文化的妥当性は調査票では逆転項目ですが，Qualtrics の時点で選択肢の値が逆向きに割り当てられており(5 = まったくそう思わない … 1 = とてもそう思う)，記録された値は既に「大きいほど文化的に妥当」でした(10/30 に下司さんが指摘・三浦先生が確認)。10/07 の計算ではこれを 6 − 値 に逆転していたため二重の逆転になっていました。訂正後は記録された値のまま使います。BF01 は変わらず，δ の符号だけが入れ替わります(人手版の方がやや妥当な向き)。訂正前の値は `仮説1_独立再現_結果.md`(10/07 の記録)に残し，変わった点は同じ文書の末尾にまとめてあります。
+- 枠組み: 評定を数値として扱い，**差得点モデル**(AI 版 − 人手版の差を目的変数にする)と**評定モデル**(評定そのものに版の効果を入れる)の2本を組みました。どちらも尺度の階層を置き，回答者の効果は主分析に入れていません。
+- 最上位の標準化した差 δ の事前分布は IPA どおり Cauchy(0, √2/2) です。BF01 は bridgesampling(warp3)を10回繰り返した値の中央値で，Savage–Dickey で検算しています。
+- **差の向きは AI 版 − 人手版**で，**負 = 人手版の方が高い**です(国里さんの版は人手 − AI で逆向きです)。
+- BF の記号は ○ = BF01 > 3(差がない方を支持)，△ = 1/3〜3(判断保留)，× = BF01 < 1/3(差がある方を支持)です。
+- ROPE は δ の上で −0.2〜+0.2(IPA のデザイン分析の SESOI)です。HDI と ROPE の関係は「すっぽり含む」(HDI が ROPE の内側)，「一部含む」(重なる)，「含まない」(外側)の3段階で示し，ROPE に入る事後確率 P(δ∈ROPE) を添えます。
+- BF と HDI はどちらも優先せず，組み合わせで報告します(白黒の判定はしません)。
+
+# 仮説3(一般回答者の理解しやすさ)
+
+対象は除外基準1・2だけを当てたデータ(除外基準3なし)で，`r formatC(h3_sum$n_obs[h3_sum$tag == "main_diff"], format = "d", big.mark = ",")` 対(差得点)・`r formatC(h3_sum$n_obs[h3_sum$tag == "main_rating"], format = "d", big.mark = ",")` 評定，21尺度(TIVS を除く)です。
+
+## 主分析
+
+```{r}
+#| label: tbl-h3-main
+#| tbl-cap: "仮説3の主分析(全体1本)"
+h3_sum %>%
+  dplyr::filter(stringr::str_detect(tag, "^main_")) %>%
+  tidy_summary() %>%
+  dplyr::transmute(モデル = model_jp(model), BF01, `10回の範囲`, 記号, `δ 事後平均値 [95% HDI]`,
+                   `HDI と ROPE`, `P(δ∈ROPE)`, `評定の単位の差 [95% HDI]`) %>%
+  knitr::kable()
+```
+
+```{r}
+#| label: h3-main-values
+# 本文で使う値
+h3_mean_ai <- h3_top %>% dplyr::filter(tag == "main_rating", hyp == "H1", par == "mean_ai")
+h3_mean_hu <- h3_top %>% dplyr::filter(tag == "main_rating", hyp == "H1", par == "mean_human")
+h3_tau <- h3_top %>% dplyr::filter(tag == "main_diff", hyp == "H1", par == "tau")
+```
+
+- 両モデルとも BF は △(差がない方にやや寄るが判断保留)，δ は負(人手版の方がやや理解しやすいと評定された)で，HDI は ROPE を「すっぽり含む」か「一部含む」かの境目にあります(差得点モデルの HDI の下限は −0.1995)。
+- 0 についても境目です。差得点モデルの δ の HDI の上限は +0.0002 で 0 を含みますが，評定の単位の μ の HDI は 0 を含みません。
+- 評定の平均(評定モデル)は AI 版 `r fmt_ci(h3_mean_ai$mean, h3_mean_ai$hdi_low, h3_mean_ai$hdi_high)`，人手版 `r fmt_ci(h3_mean_hu$mean, h3_mean_hu$hdi_low, h3_mean_hu$hdi_high)` です。尺度間の差の SD は τ = `r fmt_ci(h3_tau$mean, h3_tau$hdi_low, h3_tau$hdi_high)` で，尺度によって差の向きも大きさも違います。
+- 収束(H1・H0 の全パラメータ): `r conv_line(h3_conv, c("main_diff", "main_rating"))`。bridgesampling の安定性の基準(10回の log BF01 の幅 < 0.1，記号が10回とも同じ，Savage–Dickey と比が 0.8〜1.25 倍の内側)はすべて満たしました。
+
+## 尺度ごと
+
+尺度ごとの BF は仮説の判定には使わない参考記録です。各セルは「BF01 記号 / δ 事後平均値 [95% HDI] HDI と ROPE / P(δ∈ROPE)」で，`BayesFactor::ttestBF`(差得点は対応あり，評定は2群，r = √2/2)による尺度ごとの単独の分析です。右端の列は階層モデル(差得点)の尺度ごとの差 μ_j(全体の方へ引き寄せたもの，評定の単位)です。
+
+```{r}
+#| label: tbl-h3-scale
+#| tbl-cap: "仮説3の尺度ごとの参考記録(21尺度)"
+h3_sbf %>%
+  dplyr::filter(r_label == "main") %>%
+  dplyr::mutate(cell = scale_cell(bf01, bf_mark, delta_mean, delta_hdi_low, delta_hdi_high, hdi_rope, p_rope)) %>%
+  dplyr::select(scale_id, n, model, cell) %>%
+  tidyr::pivot_wider(names_from = model, values_from = cell) %>%
+  dplyr::left_join(
+    h3_post %>%
+      dplyr::filter(tag == "main_diff", par == "mu_scale") %>%
+      dplyr::transmute(scale_id, mu = fmt_ci(mean, hdi_low, hdi_high)),
+    by = "scale_id"
+  ) %>%
+  dplyr::left_join(scale_names, by = "scale_id") %>%
+  dplyr::arrange(scale_id) %>%
+  dplyr::transmute(ID = scale_id, 尺度 = scale_name, n, `差得点(対応あり)` = diff, `評定(2群)` = rating,
+                   `階層モデルの μ_j [95% HDI]` = mu) %>%
+  knitr::kable()
+```
+
+```{r}
+#| label: h3-scale-count
+# 記号の分布
+h3_mark_n <- h3_sbf %>%
+  dplyr::filter(r_label == "main") %>%
+  dplyr::count(model, bf_mark) %>%
+  tidyr::pivot_wider(names_from = bf_mark, values_from = n, values_fill = 0)
+h3_mark_txt <- function(m) {
+  d <- h3_mark_n %>% dplyr::filter(model == m)
+  out <- paste0("○ ", d$o, "・△ ", d$tri, "・× ", d$x)
+  return(out)
+}
+```
+
+- 記号の分布は，差得点 `r h3_mark_txt("diff")`，評定 `r h3_mark_txt("rating")` です。× の尺度のうち ID 6 だけが AI 版の方が高く，ほかは人手版の方が高い向きです。
+
+# 仮説1(専門家の評価)
+
+対象は 106 人・観点ごとに 367 対(両版がそろう対)・21尺度です。専門家データはフラグ付きの TSV から除外(同意・適格性・注意チェックと AI トラップの誤答)を自分で当て，解析に入る値が共有の long 形式と全行で一致することを確かめています。文化的妥当性は記録された値のまま使います(Qualtrics で値が逆向きに割り当て済みで，3観点とも大きいほど好評価です)。
+
+## 主分析
+
+```{r}
+#| label: tbl-h1-main
+#| tbl-cap: "仮説1の主分析(観点ごとに1本)"
+h1_sum %>%
+  dplyr::filter(stringr::str_detect(tag, "_main_")) %>%
+  dplyr::mutate(aspect = factor(aspect, levels = c("semantic", "naturalness", "cultural_validity"))) %>%
+  dplyr::arrange(aspect, model) %>%
+  tidy_summary() %>%
+  dplyr::transmute(観点 = aspect_jp(as.character(aspect)), モデル = model_jp(model), BF01, `10回の範囲`, 記号,
+                   `δ 事後平均値 [95% HDI]`, `HDI と ROPE`, `P(δ∈ROPE)`, `評定の単位の差 [95% HDI]`) %>%
+  knitr::kable()
+```
+
+- 6本とも δ の HDI は 0 を含み，ROPE を「一部含む」です。
+- 意味的忠実性は δ が正で，AI 版の方がやや高い向きです。IPA の予想(人手版 > AI 版)とは逆向きになりました。
+- 表現の自然さは δ が負(人手版がやや高い)で，差得点モデルは ○，評定モデルは △ と物差しによって記号が分かれました。
+- 文化的妥当性は両モデルとも ○ で，δ は負(人手版の方がやや文化的に妥当)です。向きは IPA の予想と同じですが，「差がない」の方が5〜7倍支持されます。評定の平均(記録された値)は AI 版 3.62・人手版 3.74 です。**10/07 の計算では二重の逆転のため δ の符号が逆(+0.081・+0.099)でした**。BF01 は符号の入れ替えで変わらないので，記号は同じです。
+- 収束(H1・H0 の全パラメータ): `r conv_line(h1_conv, h1_sum$tag[stringr::str_detect(h1_sum$tag, "_main_")])`。bridgesampling の安定性の基準は6本ともすべて満たしました。
+
+### 予想の向きに対する片側 BF(探索)
+
+IPA の比較は「差がない/差がある」なので主分析は両側の BF01 です。予想の向き(δ < 0 = 人手版 > AI 版)を参考に見たのが下の表で，BF0− = BF01 × 0.5 / P(δ < 0 | データ) です(主分析の H1 の事後から)。
+
+```{r}
+#| label: tbl-h1-onesided
+#| tbl-cap: "仮説1の片側 BF0−(予想の向きに対する「差がない」の支持)"
+h1_sum %>%
+  dplyr::filter(stringr::str_detect(tag, "_main_")) %>%
+  dplyr::mutate(aspect = factor(aspect, levels = c("semantic", "naturalness", "cultural_validity"))) %>%
+  dplyr::arrange(aspect, model) %>%
+  dplyr::transmute(観点 = aspect_jp(as.character(aspect)), モデル = model_jp(model),
+                   `P(δ < 0)` = fmt(p_neg), `BF0−` = fmt_bf(bf0neg)) %>%
+  knitr::kable()
+```
+
+- 表現の自然さは IPA で「差がない」と予想された観点で，同じ向きで参考に出しています。
+- 文化的妥当性は事後の 82% が予想の向き(人手版 > AI 版)にあり，BF0− は 4.0・3.2 です。10/07 の計算(二重の逆転)では事後の 18% しか予想の向きになく BF0− は 18.5・14.9 でした。向きの訂正で最も動くのはこの片側 BF で，予想の向きに対する「差がない」の支持は弱まりましたが，区分は ○ のままです。
+
+## 尺度ごと
+
+各観点 21尺度・1尺度あたり 12〜32 対と少ないので，HDI は広くなります。セルの形は仮説3と同じです。
+
+```{r}
+#| label: h1-scale-fun
+# 観点ごとの尺度の表を作る
+h1_scale_tbl <- function(asp) {
+  out <- h1_sbf %>%
+    # cv_mode の印は文化的妥当性にだけ意味がある(他の観点の行は 10/07 の計算の印のまま)
+    dplyr::filter(aspect == asp, r_label == "main", aspect != "cultural_validity" | cv_mode == "asis") %>%
+    dplyr::mutate(cell = scale_cell(bf01, bf_mark, delta_mean, delta_hdi_low, delta_hdi_high, hdi_rope, p_rope)) %>%
+    dplyr::select(scale_id, n, model, cell) %>%
+    tidyr::pivot_wider(names_from = model, values_from = cell) %>%
+    dplyr::left_join(scale_names, by = "scale_id") %>%
+    dplyr::arrange(scale_id) %>%
+    dplyr::transmute(ID = scale_id, 尺度 = scale_name, n, `差得点(対応あり)` = diff, `評定(2群)` = rating)
+  return(out)
+}
+```
+
+```{r}
+#| label: tbl-h1-scale-sem
+#| tbl-cap: "仮説1の尺度ごとの参考記録: 意味的忠実性"
+knitr::kable(h1_scale_tbl("semantic"))
+```
+
+```{r}
+#| label: tbl-h1-scale-nat
+#| tbl-cap: "仮説1の尺度ごとの参考記録: 表現の自然さ"
+knitr::kable(h1_scale_tbl("naturalness"))
+```
+
+```{r}
+#| label: tbl-h1-scale-cv
+#| tbl-cap: "仮説1の尺度ごとの参考記録: 文化的妥当性"
+knitr::kable(h1_scale_tbl("cultural_validity"))
+```
+
+# 探索パート(参考)
+
+本体の判定とは分けて報告する感度分析と探索です。BF01 は主分析と同じ bridgesampling の中央値で，右端の列は Savage–Dickey による検算の値です。
+
+## 仮説3
+
+```{r}
+#| label: tbl-h3-explore
+#| tbl-cap: "仮説3の探索パート"
+h3_sum %>%
+  dplyr::filter(stringr::str_detect(tag, "^x_")) %>%
+  tidy_summary() %>%
+  dplyr::mutate(
+    BF01 = ifelse(tag == "x_person", "確定できない", BF01),
+    記号 = ifelse(tag == "x_person", "—", 記号)
+  ) %>%
+  dplyr::transmute(内容 = xtag_jp(tag), BF01, `10回の範囲`, 記号, `δ 事後平均値 [95% HDI]`,
+                   `HDI と ROPE`, `P(δ∈ROPE)`, `S–D BF01` = fmt_bf(bf01_sd)) %>%
+  knitr::kable()
+```
+
+```{r}
+#| label: h3-explore-values
+h3_gamma <- h3_top %>% dplyr::filter(tag == "x_order", hyp == "H1", par == "gamma[1]")
+h3_rho <- h3_top %>% dplyr::filter(tag == "x_lkj", hyp == "H1", par == "rho_ab")
+```
+
+- r_scale を 1/2 → √2/2 → 1 → √2 と広げると BF01 は差がない方へ動き，r_scale = 1 以上で ○ に変わります。δ の HDI はほぼ変わりません。分散の事前分布の幅を半分・倍にしても △ のままです。
+- 除外基準3あり(1,211人)では差がやや大きくなり，BF01 は 1.3〜1.4(△)です。累積プロビットも BF01 = 1.58(△)で，主分析より差がある方へ寄ります。
+- 先に答えた版の項は γ = `r fmt_ci(h3_gamma$mean, h3_gamma$hdi_low, h3_gamma$hdi_high)` で，AI 版を先に答えた人ほど差(AI − 人手)が負に大きく，2回目に答えた版の方が高く評定される傾向です。尺度の切片と差の相関は ρ = `r fmt_ci(h3_rho$mean, h3_rho$hdi_low, h3_rho$hdi_high)` です。
+- 回答者の効果を入れたモデルは推定は収束しましたが，**bridgesampling が安定せず BF を確定できませんでした**(10回の BF01 が 0.13〜80 にばらつき，パラメータが約1,880次元あるためとみられます)。表の Savage–Dickey の値は参考値です。
+
+## 仮説1
+
+```{r}
+#| label: tbl-h1-explore
+#| tbl-cap: "仮説1の探索パート"
+h1_sum %>%
+  dplyr::filter(stringr::str_detect(tag, "_x_")) %>%
+  dplyr::mutate(aspect = factor(aspect, levels = c("semantic", "naturalness", "cultural_validity")),
+                xtag = stringr::str_remove(tag, "^(sem|nat|cv)_")) %>%
+  dplyr::arrange(aspect, xtag) %>%
+  tidy_summary() %>%
+  dplyr::mutate(
+    BF01 = ifelse(xtag == "x_person", "(計算しない)", BF01),
+    記号 = ifelse(xtag == "x_person", "—", 記号)
+  ) %>%
+  dplyr::transmute(観点 = aspect_jp(as.character(aspect)), 内容 = xtag_jp(xtag), BF01, 記号,
+                   `δ 事後平均値 [95% HDI]`, `HDI と ROPE`, `P(δ∈ROPE)`, `S–D BF01` = fmt_bf(bf01_sd)) %>%
+  knitr::kable()
+```
+
+- 回答者の効果ありのモデルは，仮説3で bridgesampling が安定しなかったので推定と Savage–Dickey だけにしました。
+- 文化的妥当性を 6 − 値 で逆転した版は，10/07 の計算で主分析にしていた扱い(二重の逆転)を記録のために残したものです。δ の符号が入れ替わるだけで BF01 は主分析と同じです。記録された値のままの文化的妥当性は意味的忠実性(r = 0.19)・表現の自然さ(r = 0.23)と正の相関があり，3観点が同じ向き(大きいほど好評価)で記録されていることと整合します。10/07 の報告ではこの正の相関を「回答者が肯定的な項目として読んだ疑い」と解釈し，回答者ごとに逆転し直す探索を置いていましたが，前提が誤りだったので取り下げました。
+- 先に評価した版の項は，3観点とも2番目に評価した版の方が高く評定される向きです(文化的妥当性の γ = −0.73 [−1.09, −0.39]。10/07 の報告で文化的妥当性だけ逆向きに見えたのは二重の逆転のためでした)。
+
+# 国里さんの版との比較
+
+国里さんの版(origin/main 921f801 の `primary/`)は，評定を順序として扱う累積ロジットのモデルで，回答者と尺度の切片と傾き・ペアの切片を入れ，差 β(人手 − AI，対数オッズ)に Normal(0, 1) を置いて Savage–Dickey で BF を求めています。こちらの結果を固めた後に初めて国里さんの実装と結果を見て突き合わせました(詳細は `仮説1・3_国里版との突き合わせ.md`)。
+
+**この節の文化的妥当性は，両者とも 6 − 値 に逆転した扱い(10/07 の計算)のままです**。国里さんの版は訂正前の値で，こちらも対応する探索パートの値(文化的妥当性を 6 − 値 で逆転した版)と同じものを載せています。訂正後の主分析は δ の符号が反対になるだけで BF01 は同じです。国里さんの版が訂正されたら，この節を作り直します。
+
+## 最上位の差と BF01
+
+国里さんの値は人手 − AI(正 = 人手版が高い)，こちらの値は AI − 人手(負 = 人手版が高い)のままで，**符号が逆なら同じ向き**です。国里さんの区間は等裾の 95% 信用区間，こちらは 95% HDI です。
+
+```{r}
+#| label: tbl-compare-main
+#| tbl-cap: "最上位の差と BF01 の比較(こちらは差得点モデル)"
+id_jp <- c(H3_除外3なし = "仮説3(除外基準3なし・主)", H3_除外3あり = "仮説3(除外基準3あり)",
+           H1_意味 = "仮説1 意味的忠実性", H1_自然 = "仮説1 表現の自然さ", H1_文化 = "仮説1 文化的妥当性")
+bf_mark_num <- function(b) {
+  out <- dplyr::case_when(b > 3 ~ "○", b < 1 / 3 ~ "×", TRUE ~ "△")
+  return(out)
+}
+dplyr::inner_join(
+  cmp_kun %>% dplyr::transmute(id, kun_est = fmt_ci(pm, lo, hi, 2), kun_bf = bf01_reported),
+  cmp_our %>% dplyr::transmute(id, our_est = fmt_ci(pm, lo, hi, 3), our_bf = bf01_reported),
+  by = "id"
+) %>%
+  dplyr::transmute(
+    項目 = unname(id_jp[id]),
+    `国里版 β [95% CrI]` = kun_est,
+    `国里版 BF01` = paste(fmt_bf(kun_bf), bf_mark_num(kun_bf)),
+    `小杉版 δ [95% HDI]` = our_est,
+    `小杉版 BF01` = paste(fmt_bf(our_bf), bf_mark_num(our_bf))
+  ) %>%
+  knitr::kable()
+```
+
+- 向きは5行とも同じです。仮説3(主)は両者とも BF が △ で，人手版の方が高い向きです。仮説1の意味的忠実性は両者とも AI 版がやや高い向きで，「人手版 > AI 版」という予想は支持されません。文化的妥当性の行は両者とも訂正前(6 − 値)の値で，訂正後は両者とも人手版がやや高い向きに反転する見込みです(国里さんの版は片側 BF+0 を使っているので，訂正で値が動きます。こちらの両側 BF01 は動きません)。
+- 違うのは BF の寄り方で，国里さんの版は差がある方へ，こちらは差がない方へ寄ります。表現の自然さは国里さんの版が △(1.33)，こちらは差得点で ○(3.67)・評定で △(2.76)です。
+
+## 事前分布だけを入れ替えた BF01
+
+報告された事後平均値と 95% 区間から尤度を正規近似し，事前分布だけを入れ替えた BF01 を数値積分で求めました(Stan は回していません)。国里さんの β に置く Cauchy(0, √2/2) は，標準化の単位を潜在尺度の残差 SD(π/√3)にした場合と，2版の差の SD(残差 SD × √2)にした場合の2通りです。逆向きに，こちらの δ に国里さんの Normal(0, 1) に相当する正規分布を置いた値も載せます。
+
+```{r}
+#| label: tbl-compare-prior
+#| tbl-cap: "事前分布の入れ替え(正規近似による切り分け)"
+dplyr::inner_join(
+  cmp_kun %>% dplyr::transmute(id, kun_rep = bf01_reported, kun_n01 = bf01_N01,
+                               kun_cr = bf01_cauchy_resid, kun_cd = bf01_cauchy_diff),
+  cmp_our %>% dplyr::transmute(id, our_rep = bf01_reported, our_c = bf01_cauchy,
+                               our_nr = bf01_N_resid, our_nd = bf01_N_diff),
+  by = "id"
+) %>%
+  dplyr::transmute(
+    項目 = unname(id_jp[id]),
+    `国里版 報告` = fmt_bf(kun_rep), `国里版 近似` = fmt_bf(kun_n01),
+    `→ Cauchy(残差の単位)` = fmt_bf(kun_cr), `→ Cauchy(差の単位)` = fmt_bf(kun_cd),
+    `小杉版 報告` = fmt_bf(our_rep), `小杉版 近似` = fmt_bf(our_c),
+    `→ 正規(残差の単位)` = fmt_bf(our_nr), `→ 正規(差の単位)` = fmt_bf(our_nd)
+  ) %>%
+  knitr::kable()
+```
+
+- 仮説1の BF の違いはほぼ事前分布で説明できます。国里さんの値を IPA 相当の Cauchy にすると 2.1〜5.2 になり，こちらの値の範囲に入ります。
+- 仮説3は事前分布で半分ほどが説明でき，残りは評定を順序として扱うか数値として扱うかの違いとみられます(こちらの探索パートの累積プロビットも BF01 = 1.58 と差がある方へ寄ります)。
+- BF の計算法(Savage–Dickey か bridgesampling か)は違いの原因ではありません。両者とも，それぞれの中で2つの方法が一致しています。
+
+## 仮説3の尺度ごとの差
+
+国里さんの版の尺度ごとの予測評定差と，こちらの階層モデルの μ_j(向きを人手 − AI にそろえたもの)の比較です。「区間の位置」は区間が 0 より上(人手版が高い)・下(AI 版が高い)・0 を含むかです。
+
+```{r}
+#| label: tbl-compare-scale
+#| tbl-cap: "仮説3の尺度ごとの差の比較(人手 − AI，評定の単位)"
+cmp_scale %>%
+  dplyr::left_join(scale_names, by = "scale_id") %>%
+  dplyr::transmute(
+    ID = scale_id, 尺度 = scale_name,
+    `国里版 [95% CrI]` = fmt_ci(kun_mean, kun_lo, kun_hi),
+    `国里版 区間の位置` = dplyr::recode(kun_side, 人手 = "人手版が高い", AI = "AI 版が高い", `0を含む` = "0 を含む"),
+    `小杉版 μ_j [95% HDI]` = fmt_ci(our_mean, our_lo, our_hi),
+    `小杉版 区間の位置` = dplyr::recode(our_side, 人手 = "人手版が高い", AI = "AI 版が高い", `0を含む` = "0 を含む"),
+    一致 = ifelse(same_side, "○", "×")
+  ) %>%
+  knitr::kable()
+```
+
+- 21尺度の点推定の相関は `r fmt(cmp_scale_sum$r_mean)` で，区間の位置は `r cmp_scale_sum$n_same_side`/`r cmp_scale_sum$n_scales` 尺度で一致しました。違うのは ID `r cmp_scale_sum$differ_ids` だけで，両者とも区間の端が 0 の近くにある境目の尺度です。
+
+# 計算の情報
+
+- 計算は Al-khwa(研究室のサーバ)で行いました。rstan 2.32.7・bridgesampling 1.2.1・BayesFactor 0.9.12-4.8・brms 2.23.0。主分析は 4 チェーン × 22,000 反復(ウォームアップ 2,000，事後 80,000)，乱数の種は 20261006 です。
+- stanfit 本体(数 GB)は Al-khwa に置き，このリポジトリには要約(`results/`)だけを入れています。
+- 計算の手順と各ファイルの役割は `supplementary/README.md` にあります。

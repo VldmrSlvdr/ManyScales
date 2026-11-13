@@ -1,7 +1,10 @@
 MIT License
 
 Copyright (c) 2025 Yi-Fei Li
-Additional attribution: Portions inspired by the R package "LLMTranslate" by Jonas R. Kunst (c) 2025.
+Copyright (c) 2026 ManyScales contributors
+Copyright (c) 2025 Jonas R. Kunst (LLMTranslate)
+Copyright (c) 2026 Yoshihiko Kunisato (LLMTranslate4Hitode modifications)
+Copyright (c) 2026 Yoshihiko Kunisato and Koji Kosugi (rating analyses)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

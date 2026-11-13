@@ -1,0 +1,37 @@
+# Open-weight measurement instruments for H4.
+# The confirmatory model is frozen here, in configs/analysis.yaml,
+# and in h4.config.FROZEN_PRIMARY_MODEL. Agreement among the three
+# is required when study.preregistered is true.
+models:
+  primary:
+    name: sentence-transformers/paraphrase-multilingual-mpnet-base-v2
+    short_name: mpnet
+    family: sentence_transformer
+    role: confirmatory
+    normalize: true
+    expected_dimension: 768
+
+  robustness:
+    - name: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+      short_name: minilm
+      family: sentence_transformer
+      normalize: true
+      expected_dimension: 384
+
+    - name: sentence-transformers/LaBSE
+      short_name: labse
+      family: sentence_transformer
+      normalize: true
+      expected_dimension: 768
+
+    - name: intfloat/multilingual-e5-large-instruct
+      short_name: e5
+      family: e5_instruct
+      normalize: true
+      expected_dimension: 1024
+      prompt_policy: symmetric_instruction
+      # Applied to every item, on both sides of a pair, so the human
+      # and LLM strings receive the same transformation.
+      instruction: >-
+        Represent this psychological scale item for semantic
+        similarity comparison.
