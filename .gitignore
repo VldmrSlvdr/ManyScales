@@ -1,70 +1,128 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-pip-wheel-metadata/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
+# Research inputs, derived data, fitted models, and local releases
+**/data/**
+**/results/**
+**/materials/**
+!translation/materials/README.md
+*.csv
+*.tsv
+*.tab
+*.xls
+*.xlsx
+*.ods
+*.sav
+*.zsav
+*.dta
+*.sas7bdat
+*.rds
+*.RDS
+*.Rdata
+*.RData
+*.rdata
+*.parquet
+*.arrow
+*.feather
+*.jsonl
+*.ndjson
+*.csv.gz
+*.tsv.gz
+*.h5
+*.hdf5
+*.sqlite*
+*.db
+*.npy
+*.npz
+*.pkl
+*.pickle
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+*.gguf
+*.qsf
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
 
-# Virtual environments
+# Generated reports and figures; only curated publication exports are tracked
+*.html
+*.png
+*.jpg
+*.jpeg
+*.tif
+*.tiff
+*.pdf
+*.svg
+!/reports/*.html
+!/figures/**/*.png
+!/figures/**/*.pdf
+!/figures/**/*.svg
+*.knit.md
+*.utf8.md
+**/*_files/
+**/_freeze/
+**/.quarto/
+**/fits/
+**/mcmc_cache/
+cache/
+models/
+outputs/
+logs/
+*.log
+*.tmp
+*.temp
+*.bak
+*.lock
+
+# Credentials and machine-specific settings
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*credentials*.json
+secrets.*
+*_secrets.*
+.Renviron
+.Rprofile
+.Rhistory
+.RData
+.Rlib/
+.github/
+
+# Dependencies, build products, editors, and operating systems
+.venv/
 venv/
 env/
 ENV/
-env.bak/
-venv.bak/
-
-# IDEs
+node_modules/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.Rproj.user/
+*.Rproj
+build/
+dist/
+.coverage
+htmlcov/
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-.DS_Store
 
-# Project specific
-cache/
-outputs/
-logs/
-*.log
-
-# Data files (uncomment if you don't want to track data)
-# data/*.csv
-# data/*.xlsx
-
-# API keys and secrets
-.env
-secrets.yaml
-*_secrets.yaml
-
-# Jupyter
-.ipynb_checkpoints/
-
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-
-# Documentation
-docs/_build/
-
-# reference files
-LLMTranslate-master/
-
-# archives
-archives/
+# The repository uses one shared LICENSE. The R installer stages a package copy.
+/translation/LLMTranslate/LICENSE

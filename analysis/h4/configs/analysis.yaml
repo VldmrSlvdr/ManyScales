@@ -1,0 +1,96 @@
+study:
+  id: manyscales_h4
+  unit: item
+  grouping: scale_id
+  preregistered: true
+
+analysis_tiers:
+  confirmatory:
+    comparison:
+      source: original_en
+      human: human_back_en
+      llm: llm_back_en
+
+    embedding:
+      model: sentence-transformers/paraphrase-multilingual-mpnet-base-v2
+      normalize: true
+
+    metric:
+      name: cosine
+
+    estimand:
+      name: human_minus_llm
+      expression: human_similarity - llm_similarity
+      expected_direction: positive
+
+    inference:
+      method: hierarchical
+      engine: statsmodels_mixedlm
+      grouping: scale_id
+      confidence_level: 0.95
+
+  robustness:
+    alternative_models:
+      - sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+      - sentence-transformers/LaBSE
+      - intfloat/multilingual-e5-large-instruct
+
+    direct_crosslingual:
+      enabled: true
+      source: original_en
+      human: human_ja
+      llm: llm_ja
+
+    hierarchical_bootstrap:
+      enabled: true
+      iterations: 10000
+      hierarchy:
+        - scale_id
+        - item_id
+
+  exploratory:
+    hara_pooling_analysis:
+      enabled: true
+      reference: Hara2026
+      save_token_embeddings: true
+      analyses:
+        - pooling_collapse
+        - second_order_geometry
+        - item_level_diagnostics
+        - relation_to_model_disagreement
+
+    alternative_pooling:
+      enabled: true
+      methods:
+        - mean
+        - cls
+
+    token_distribution:
+      enabled: true
+      metrics:
+        - wasserstein
+      cost: euclidean
+      status: exploratory
+
+validation:
+  identical_pairs: true
+  within_scale_permutation: true
+  between_scale_permutation: true
+  negation_test: true
+
+runtime:
+  device: auto
+  batch_size: 32
+  dtype: float32
+
+paths:
+  workbook: ../../translation/materials/ManyScales対象尺度.xlsx
+  scales: data/raw/scales.json
+  items: data/processed/items_clean.parquet
+  diagnostic_pairs: data/validation/diagnostic_pairs.csv
+  processed: data/processed/items_clean.parquet
+  results: results
+  model_registry: configs/models.yaml
+  metric_registry: configs/metrics.yaml
+
+seed: 20260928

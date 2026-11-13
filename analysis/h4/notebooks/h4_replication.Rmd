@@ -1,0 +1,1222 @@
+---
+title: "ManyScales H4: linear model and exploratory checks"
+author: "ManyScales replication"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+## Purpose
+
+This report is the linear reading of the hypothesis 4 pipeline. Each transformation is a function in this file, and the next chunk reviews what that function changed. The study implementation is split across Python modules. This file restates the same rules in order, so a second programmer can check them here.
+
+The confirmatory equation is
+
+$$\Delta_{is}=\mu+u_s+\varepsilon_{is}$$
+
+with `\Delta` equal to the human back-translation cosine minus the LLM back-translation cosine. The fit is REML. A positive `\mu` would mean the human back-translation stayed closer. Python produces the gaps from the local model weights. This file does not download a model and does not read item wording.
+
+TIVS, scale 11, is removed before this fit. That deletion is the same preparation decision as in the hypothesis 2 report. The 22-scale fit is computed afterwards as a robustness check.
+
+The respondent cut is a separate preparation. Confirmatory cosine scoring does not read the citizen or expert tables. Section 2 writes those rules out and checks them on a constructed export. Later sections build the scale predictor `z_s`, check the Wasserstein sign and the `d_mu` identity on a small numeric example, and record the 21-scale judgment slopes.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+repo <- normalizePath(file.path(dirname(knitr::current_input(dir = TRUE)), ".."))
+knitr::opts_knit$set(root.dir = repo)
+```
+
+```{r}
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(ggplot2)
+  library(lme4)
+  library(knitr)
+  library(readr)
+  library(tibble)
+  library(conflicted)
+})
+
+conflicts_prefer(dplyr::filter)
+conflicts_prefer(dplyr::select)
+conflicts_prefer(dplyr::mutate)
+conflicts_prefer(dplyr::summarise)
+conflicts_prefer(dplyr::rename)
+conflicts_prefer(lme4::lmer)
+```
+
+**Cultural-rating coding audit (2026-10-31).** The negative-worded statement is already scored 5 = strongly disagree and 1 = strongly agree in the export. Higher values mean better cultural validity. H4 preserves those codes; it does not apply `6 - value`. Cultural problem checkboxes retain their separate 0/1 meaning. See [the audit summary](../../../docs/reproduce.md). The current refit gives a human-minus-LLM similarity-slope difference of **+0.739 [0.032, 1.445]** on this favorable rating scale. Both simple-slope intervals include zero; the interaction does not establish higher overall cultural validity for human translations.
+
+**Expert choice fit is also a positive exploratory finding.** The human-text similarity slope is +0.348 [0.115, 0.580] (odds ratio 1.42 [1.12, 1.79] per SD), whereas the human-minus-LLM slope difference is +0.334 [−0.255, 0.924]. The first supports a positive association within the human version; the second does not establish a version difference. These are similarity slopes, not intercepts.
+
+Study inputs are supplied separately through the [OSF project](https://osf.io/hn4fr/) (upload pending) and attached locally. No datasets are bundled in GitHub.
+
+## 1. Data review
+
+`review_gaps` counts rows, scales, and missing values, and summarizes `\Delta`. It does not print a file path.
+
+```{r}
+review_gaps <- function(frame, label) {
+  tibble(
+    table = label,
+    n_rows = nrow(frame),
+    n_items = dplyr::n_distinct(frame$item_id, frame$scale_id),
+    n_scales = dplyr::n_distinct(frame$scale_id),
+    n_missing_delta = sum(is.na(frame$delta)),
+    mean_delta = mean(frame$delta),
+    min_delta = min(frame$delta),
+    max_delta = max(frame$delta),
+    mean_human = mean(frame$human),
+    mean_llm = mean(frame$llm)
+  )
+}
+
+delta_path <- Sys.getenv("H4_DELTA_CSV", unset = "")
+if (!nzchar(delta_path)) {
+  delta_path <- file.path(repo, "data", "published", "mpnet_item_delta.csv")
+}
+gaps <- readr::read_csv(delta_path, show_col_types = FALSE) %>%
+  mutate(
+    scale_id = sprintf("%02d", as.integer(scale_id)),
+    in_primary = as.logical(in_primary)
+  )
+
+back <- gaps %>% filter(comparison == "back_translation")
+direct <- gaps %>% filter(comparison == "direct_crosslingual")
+primary <- back %>% filter(in_primary)
+with_tivs <- back
+direct_primary <- direct %>% filter(in_primary)
+
+bind_rows(
+  review_gaps(back, "back-translation, TIVS still present"),
+  review_gaps(primary, "back-translation, TIVS removed"),
+  review_gaps(direct_primary, "direct Japanese, TIVS removed")
+) %>%
+  kable(digits = 3)
+```
+
+The primary row must be 486 items and 21 scales. The table that still contains TIVS must be 508 items and 22 scales.
+
+```{r}
+stopifnot(nrow(primary) == 486, dplyr::n_distinct(primary$scale_id) == 21)
+stopifnot(nrow(with_tivs) == 508, dplyr::n_distinct(with_tivs$scale_id) == 22)
+stopifnot(!any(primary$scale_id == "11"))
+stopifnot(any(with_tivs$scale_id == "11"))
+```
+
+Scale plots below use the instrument name next to the scale id. The names are the study abbreviations. They are not item wording.
+
+```{r}
+scale_names <- readr::read_csv(file.path(repo, "data", "published", "scale_names.csv"), show_col_types = FALSE) %>%
+  mutate(
+    scale_id = sprintf("%02d", as.integer(scale_id)),
+    scale_label = paste(scale_id, scale_name)
+  )
+stopifnot(all(primary$scale_id %in% scale_names$scale_id))
+stopifnot(all(with_tivs$scale_id %in% scale_names$scale_id))
+```
+
+## 2. Survey pre-analysis
+
+The Python entry points are `add_citizen_flags`, `add_expert_flags`, `analysis_rows_citizen`, `analysis_rows_expert`, and `reshape_survey`. A flagged person stays in the flagged table. The analysis table is the later cut. The fixture in `data/published/` is not a study respondent. The expected flags were written by those Python functions, and the functions below have to reproduce them.
+
+### Column grammar
+
+```{r}
+tibble::tribble(
+  ~survey, ~pattern, ~becomes,
+  "both", "([A-F])([0-9]{2})_item([0-9]+)_(human|ai)", "one item response",
+  "citizen", "([A-F])([0-9]{2})_timer_(human|ai)", "page time, seconds",
+  "citizen", "([A-F])([0-9]{2})_wording_(human|ai)", "citizen naturalness / wording",
+  "expert", "([A-F])([0-9]{2})_(semantic|naturalness|cultural_validity|choice_fit)_(human|ai)", "expert scale rating",
+  "expert", "([A-F])([0-9]{2})_problem_items_(human|ai)_([0-9]+)_([123])", "item problem flag",
+  "both", "([A-F])([0-9]{2})_preference", "1 is translation 1, the human column",
+  "both", "([A-F])([0-9]{2})_llm_guess", "2 is translation 2, the LLM column"
+) %>%
+  knitr::kable()
+```
+
+`trans_cond` records which version was administered first. It does not swap translation 1 and translation 2. In the long table, the Qualtrics suffix `ai` is stored as version `llm`. Problem codes are 1 semantic, 2 understandability, 3 cultural.
+
+### Citizen rules
+
+`analysis_target` is 1 when every item on the assigned set is answered. On sets C and D, scale 10 is required only when `mcs_gender` is `male`. A person who was not shown a required item is not a target.
+
+`excl1` is 1 unless `dqs01_check`, `dqs02_check`, `dqs03_check`, and `ai-trap_check` are all exactly `0`. A blank fails.
+
+`excl2` uses only people with `analysis_target` 1. For each two-digit scale id, add the human page time to the AI page time. The cutoff is that scale's mean minus 3 standard deviations. A person is flagged when any of their scales is strictly below its cutoff. The same scale on sets C and D shares one cutoff. Missing times are left out of the mean. People who did not finish receive 0.
+
+`excl3` is the originally planned straight-lining flag: it treats one answered code repeated for at least `ceiling(min(10, 0.8 * n))` items as a run. A blank breaks the run. However, item order was randomized and each respondent's realized order was not stored. The flag was therefore computed in original item order and is not valid for the analysis screen.
+
+The citizen analysis rows are `analysis_target == 1` with `excl1 == 0` and `excl2 == 0` (1,859 respondents). The earlier cut that also requires `excl3 == 0` is retained only as a three-rule sensitivity sample (1,211 respondents).
+
+### Expert rules
+
+`analysis_target` is 1 when every AI rating on the assigned set is filled and the four eligibility columns are filled and equal to `1`: native Japanese, a scale paper, an English citation, and a master's degree or higher. The rating names are semantic, naturalness, cultural_validity, and choice_fit.
+
+`excl1` is 1 when a check column equals `1`. A blank is not a failure for experts.
+
+The expert analysis rows are `analysis_target == 1` and `excl1 == 0`. The expert cut has no speeding flag and no straightlining flag.
+
+### The functions
+
+```{r}
+item_pattern <- "^([A-F])([0-9]{2})_item([0-9]+)_(human|ai)$"
+timer_pattern <- "^([A-F])([0-9]{2})_timer_(human|ai)$"
+rating_pattern <- "^([A-F])([0-9]{2})_(semantic|naturalness|cultural_validity|choice_fit)_ai$"
+checks <- c("dqs01_check", "dqs02_check", "dqs03_check", "ai-trap_check")
+eligibility <- c(
+  "eligibility_native_japanese", "eligibility_scale_paper",
+  "eligibility_english_citation", "eligibility_masters_or_higher"
+)
+
+is_filled <- function(value) {
+  !is.na(value) && nzchar(trimws(as.character(value)))
+}
+
+parse_column <- function(column, pattern) {
+  matched <- regmatches(column, regexec(pattern, column))[[1]]
+  matched
+}
+
+longest_run <- function(values) {
+  best <- 0L
+  current <- 0L
+  previous <- NA_character_
+  for (value in values) {
+    if (!is_filled(value)) {
+      current <- 0L
+      previous <- NA_character_
+      next
+    }
+    token <- trimws(as.character(value))
+    if (!is.na(previous) && token == previous) current <- current + 1L else {
+      current <- 1L
+      previous <- token
+    }
+    best <- max(best, current)
+  }
+  best
+}
+
+citizen_complete <- function(data, items) {
+  n <- nrow(data)
+  answered <- rep(TRUE, n)
+  seen <- rep(FALSE, n)
+  set_id <- as.character(data$set_id)
+  gender <- as.character(data$mcs_gender)
+  male <- !is.na(gender) & gender == "male"
+  for (column in items) {
+    parts <- parse_column(column, item_pattern)
+    in_set <- !is.na(set_id) & set_id == parts[2]
+    mcs_optional <- set_id %in% c("C", "D") & parts[3] == "10" & !male
+    required <- in_set & !mcs_optional
+    values <- vapply(data[[column]], is_filled, logical(1))
+    answered <- answered & (!required | values)
+    seen <- seen | required
+  }
+  ifelse(seen, as.integer(answered), 0L)
+}
+
+citizen_attention <- function(data) {
+  failed <- rep(FALSE, nrow(data))
+  for (column in checks) {
+    values <- trimws(as.character(data[[column]]))
+    failed <- failed | is.na(data[[column]]) | is.na(values) | values != "0"
+  }
+  as.integer(failed)
+}
+
+expert_attention <- function(data) {
+  failed <- rep(FALSE, nrow(data))
+  for (column in checks) {
+    values <- trimws(as.character(data[[column]]))
+    failed <- failed | (!is.na(values) & values == "1")
+  }
+  as.integer(failed)
+}
+
+citizen_speeding <- function(data) {
+  timers <- grep(timer_pattern, names(data), value = TRUE)
+  complete <- data$analysis_target == 1
+  pieces <- lapply(timers, function(column) {
+    parts <- parse_column(column, timer_pattern)
+    tibble(
+      row_id = seq_len(nrow(data)),
+      scale_id = parts[3],
+      condition = parts[4],
+      value = suppressWarnings(as.numeric(as.character(data[[column]]))),
+      complete = complete
+    )
+  })
+  long <- bind_rows(pieces) %>% filter(complete)
+  totals <- long %>%
+    group_by(row_id, scale_id, condition) %>%
+    summarise(value = if (all(is.na(value))) NA_real_ else sum(value, na.rm = TRUE), .groups = "drop") %>%
+    pivot_wider(names_from = condition, values_from = value) %>%
+    mutate(total_time = human + ai) %>%
+    group_by(scale_id) %>%
+    mutate(
+      cutoff = mean(total_time, na.rm = TRUE) - 3 * stats::sd(total_time, na.rm = TRUE),
+      fast = !is.na(total_time) & !is.na(cutoff) & total_time < cutoff
+    )
+  hit <- totals %>% group_by(row_id) %>% summarise(fast = any(fast, na.rm = TRUE), .groups = "drop")
+  flagged <- rep(FALSE, nrow(data))
+  flagged[hit$row_id] <- hit$fast
+  ifelse(complete, as.integer(flagged), 0L)
+}
+
+straightline_flags <- function(data, items) {
+  pieces <- lapply(items, function(column) {
+    parts <- parse_column(column, item_pattern)
+    tibble(
+      row_id = seq_len(nrow(data)),
+      scale_prefix = paste0(parts[2], parts[3]),
+      scale_id = parts[3],
+      condition = parts[5],
+      item = as.integer(parts[4]),
+      value = as.character(data[[column]])
+    )
+  })
+  long <- bind_rows(pieces) %>% arrange(row_id, scale_prefix, condition, item)
+  hits <- long %>%
+    group_by(row_id, scale_prefix, scale_id, condition) %>%
+    summarise(
+      run = longest_run(value),
+      n_items = dplyr::n(),
+      .groups = "drop"
+    ) %>%
+    mutate(flag = run >= ceiling(pmin(10, 0.8 * n_items)))
+  flagged <- hits %>% filter(flag)
+  tibble(
+    excl3human = as.integer(seq_len(nrow(data)) %in% flagged$row_id[flagged$condition == "human"]),
+    excl3ai = as.integer(seq_len(nrow(data)) %in% flagged$row_id[flagged$condition == "ai"])
+  ) %>%
+    mutate(excl3 = as.integer(excl3human == 1 | excl3ai == 1))
+}
+
+add_citizen_flags <- function(data) {
+  items <- grep(item_pattern, names(data), value = TRUE)
+  data$analysis_target <- citizen_complete(data, items)
+  data$excl1 <- citizen_attention(data)
+  data$excl2 <- citizen_speeding(data)
+  flags <- straightline_flags(data, items)
+  bind_cols(data, flags)
+}
+
+expert_complete <- function(data, ratings) {
+  n <- nrow(data)
+  answered <- rep(TRUE, n)
+  seen <- rep(FALSE, n)
+  set_id <- as.character(data$set_id)
+  for (column in ratings) {
+    parts <- parse_column(column, rating_pattern)
+    required <- !is.na(set_id) & set_id == parts[2]
+    values <- vapply(data[[column]], is_filled, logical(1))
+    answered <- answered & (!required | values)
+    seen <- seen | required
+  }
+  ifelse(seen, answered, FALSE)
+}
+
+add_expert_flags <- function(data) {
+  ratings <- grep(rating_pattern, names(data), value = TRUE)
+  eligible <- rep(TRUE, nrow(data))
+  for (column in eligibility) {
+    values <- trimws(as.character(data[[column]]))
+    eligible <- eligible & !is.na(values) & values == "1"
+  }
+  data$analysis_target <- as.integer(expert_complete(data, ratings) & eligible)
+  data$excl1 <- expert_attention(data)
+  data
+}
+
+keep_citizen <- function(data) {
+  data %>% filter(analysis_target == 1, excl1 == 0, excl2 == 0)
+}
+
+keep_citizen_sensitivity <- function(data) {
+  data %>% filter(analysis_target == 1, excl1 == 0, excl2 == 0, excl3 == 0)
+}
+
+keep_expert <- function(data) {
+  data %>% filter(analysis_target == 1, excl1 == 0)
+}
+
+read_wide <- function(path) {
+  readr::read_csv(path, col_types = cols(.default = col_character()), na = character())
+}
+```
+
+### Review the fixture
+
+`speed01` through `speed10` each take 100 seconds on scale 02. `speed_fast` takes 1 second. That is the only row below the mean minus 3 SD. `straight` repeats one human code for eight items. `mcs_skip` is not male, so the blank scale-10 items are not required. `mcs_required` is male, so the same blank items remove that person from the target.
+
+```{r}
+citizen <- read_wide(file.path(repo, "data", "published", "citizen_flag_fixture.csv"))
+citizen_expected <- readr::read_csv(
+  file.path(repo, "data", "published", "citizen_flag_expected.csv"),
+  show_col_types = FALSE
+) %>%
+  mutate(across(-respondent_id, as.integer))
+
+citizen_flags <- add_citizen_flags(citizen)
+citizen_got <- citizen_flags %>%
+  transmute(
+    respondent_id,
+    analysis_target = as.integer(analysis_target),
+    excl1 = as.integer(excl1),
+    excl2 = as.integer(excl2),
+    excl3 = as.integer(excl3),
+    excl3human = as.integer(excl3human),
+    excl3ai = as.integer(excl3ai)
+  )
+
+stopifnot(identical(citizen_got$analysis_target, citizen_expected$analysis_target))
+stopifnot(identical(citizen_got$excl1, citizen_expected$excl1))
+stopifnot(identical(citizen_got$excl2, citizen_expected$excl2))
+stopifnot(identical(citizen_got$excl3, citizen_expected$excl3))
+stopifnot(identical(citizen_got$excl3human, citizen_expected$excl3human))
+stopifnot(identical(citizen_got$excl3ai, citizen_expected$excl3ai))
+stopifnot(setequal(
+  keep_citizen(citizen_flags)$respondent_id,
+  c("complete", "mcs_skip", "straight", sprintf("speed%02d", 1:10))
+))
+stopifnot(setequal(
+  keep_citizen_sensitivity(citizen_flags)$respondent_id,
+  c("complete", "mcs_skip", sprintf("speed%02d", 1:10))
+))
+
+expert <- read_wide(file.path(repo, "data", "published", "expert_flag_fixture.csv"))
+expert_expected <- readr::read_csv(
+  file.path(repo, "data", "published", "expert_flag_expected.csv"),
+  show_col_types = FALSE
+) %>%
+  mutate(across(-respondent_id, as.integer))
+expert_flags <- add_expert_flags(expert)
+stopifnot(identical(as.integer(expert_flags$analysis_target), expert_expected$analysis_target))
+stopifnot(identical(as.integer(expert_flags$excl1), expert_expected$excl1))
+stopifnot(setequal(keep_expert(expert_flags)$respondent_id, c("expert_ok", "expert_blank_check")))
+
+bind_rows(
+  citizen_got %>% mutate(survey = "citizen", .before = 1),
+  expert_flags %>%
+    transmute(
+      survey = "expert",
+      respondent_id,
+      analysis_target = as.integer(analysis_target),
+      excl1 = as.integer(excl1),
+      excl2 = NA_integer_,
+      excl3 = NA_integer_,
+      excl3human = NA_integer_,
+      excl3ai = NA_integer_
+    )
+) %>%
+  kable()
+```
+
+### Wide columns to long rows
+
+One wide item column becomes one row. The suffix `ai` is renamed `llm` at this step. The confirmatory cosine model never reads this table.
+
+```{r}
+melt_items <- function(data) {
+  items <- grep(item_pattern, names(data), value = TRUE)
+  data %>%
+    select(respondent_id, all_of(items)) %>%
+    pivot_longer(all_of(items), names_to = "source_column", values_to = "raw_value") %>%
+    filter(nzchar(raw_value)) %>%
+    mutate(
+      parts = regmatches(source_column, regexec(item_pattern, source_column)),
+      scale_id = vapply(parts, function(part) part[3], character(1)),
+      item_id = vapply(parts, function(part) sprintf("%02d", as.integer(part[4])), character(1)),
+      version = vapply(parts, function(part) if (part[5] == "ai") "llm" else "human", character(1))
+    ) %>%
+    select(respondent_id, source_column, scale_id, item_id, version, raw_value)
+}
+
+complete_long <- melt_items(citizen) %>% filter(respondent_id == "complete")
+stopifnot(all(complete_long$version[grepl("_ai$", complete_long$source_column)] == "llm"))
+stopifnot(all(complete_long$version[grepl("_human$", complete_long$source_column)] == "human"))
+kable(complete_long)
+```
+
+### A local respondent export
+
+Set `H4_SURVEY` to a directory that contains `citizen_wide.csv` and `expert_wide.csv` when the Qualtrics-wide tables are available. The chunk prints counts. It does not print answers, and it does not print the directory.
+
+```{r}
+survey_dir <- Sys.getenv("H4_SURVEY", unset = "")
+if (!nzchar(survey_dir)) {
+  tibble(survey_directory = "not set", check = "The fixture above is the survey-cut check.") %>%
+    kable()
+} else {
+  citizen_file <- file.path(survey_dir, "citizen_wide.csv")
+  expert_file <- file.path(survey_dir, "expert_wide.csv")
+  present <- tibble(
+    citizen_wide = file.exists(citizen_file),
+    expert_wide = file.exists(expert_file)
+  )
+  print(kable(present))
+  if (isTRUE(present$citizen_wide)) {
+    live <- add_citizen_flags(read_wide(citizen_file))
+    print(kable(tibble(
+      n_rows = nrow(live),
+      n_target = sum(live$analysis_target == 1),
+      n_attention = sum(live$excl1 == 1),
+      n_speeding = sum(live$excl2 == 1),
+      n_straightline = sum(live$excl3 == 1),
+      n_analysis = nrow(keep_citizen(live)),
+      n_three_rule_sensitivity = nrow(keep_citizen_sensitivity(live))
+    )))
+  }
+  if (isTRUE(present$expert_wide)) {
+    live_expert <- add_expert_flags(read_wide(expert_file))
+    print(kable(tibble(
+      n_rows = nrow(live_expert),
+      n_target = sum(live_expert$analysis_target == 1),
+      n_attention = sum(live_expert$excl1 == 1),
+      n_kept = nrow(keep_expert(live_expert))
+    )))
+  }
+}
+```
+
+
+## 3. The confirmatory mixed model
+
+`fit_h4` fits the REML intercept and returns a Wald interval. The design matrix is an intercept only. Scale membership enters as `(1 | scale_id)`.
+
+```{r}
+fit_h4 <- function(frame) {
+  fit <- lme4::lmer(delta ~ 1 + (1 | scale_id), data = frame, REML = TRUE)
+  estimate <- lme4::fixef(fit)[[1]]
+  se <- sqrt(as.numeric(vcov(fit)))
+  variance <- as.data.frame(VarCorr(fit))
+  tibble(
+    estimate = estimate,
+    se = se,
+    ci_low = estimate - 1.96 * se,
+    ci_high = estimate + 1.96 * se,
+    n_items = nrow(frame),
+    n_scales = dplyr::n_distinct(frame$scale_id),
+    scale_variance = variance$vcov[variance$grp == "scale_id"],
+    residual_variance = variance$vcov[variance$grp == "Residual"]
+  )
+}
+
+primary_fit <- fit_h4(primary)
+robust_fit <- fit_h4(with_tivs)
+bind_rows(
+  primary_fit %>% mutate(analysis = "primary, TIVS removed", .before = 1),
+  robust_fit %>% mutate(analysis = "robustness, TIVS included", .before = 1)
+) %>%
+  kable(digits = 3)
+```
+
+The stored primary interval is −0.041 [−0.060, −0.022]. This Wald interval uses 1.96 standard errors, so the endpoints can differ in the third decimal from the profile used in the Python file. The sign and the exclusion of zero are the check.
+
+```{r}
+stopifnot(primary_fit$estimate < 0)
+stopifnot(primary_fit$ci_high < 0)
+stopifnot(abs(primary_fit$estimate - (-0.041283)) < 0.002)
+```
+
+## 4. Exploratory: scale means
+
+Scale rows show paired-item means and 95% t confidence intervals. The final overall row uses the existing random-scale REML estimate and its 95% Wald interval. Scale intervals are exploratory and unadjusted for multiple comparisons. Blue means the interval is entirely negative (LLM higher), orange entirely positive (human higher), and gray includes zero. Japanese labels and numeric scale order follow the requested reference.
+
+```{r, fig.width=6.5, fig.height=6.7}
+source(file.path(repo, "scripts", "plot_mean_item_gap_ja.R"))
+mean_gap_ja <- build_mean_item_gap_ja(repo)
+scale_means <- mean_gap_ja$table %>%
+  filter(comparison == "back_translation", scale_id != "total") %>%
+  mutate(mean_delta = estimate)
+scale_plot <- mean_gap_ja$plot %+%
+  filter(mean_gap_ja$table, comparison == "back_translation")
+scale_plot
+```
+
+```{r}
+tibble(
+  n_scales = nrow(scale_means),
+  n_negative = sum(scale_means$mean_delta < 0),
+  n_positive = sum(scale_means$mean_delta > 0)
+) %>%
+  kable()
+```
+
+## 5. Exploratory: hierarchical bootstrap
+
+Scales are drawn with replacement. Inside each drawn scale, items are drawn with replacement. The statistic is the mean of `\Delta`. The stored run used 10,000 draws and seed `20260928`.
+
+```{r}
+hierarchical_mean <- function(frame, draws = 10000, seed = 20260928) {
+  set.seed(seed)
+  pieces <- split(frame$delta, frame$scale_id)
+  names_id <- names(pieces)
+  replicate(draws, {
+    drawn <- sample(names_id, length(names_id), replace = TRUE)
+    values <- unlist(lapply(drawn, function(id) {
+      x <- pieces[[id]]
+      sample(x, length(x), replace = TRUE)
+    }), use.names = FALSE)
+    mean(values)
+  })
+}
+
+boots <- hierarchical_mean(primary)
+boot_summary <- tibble(
+  observed_mean = mean(primary$delta),
+  ci_low = unname(quantile(boots, 0.025)),
+  ci_high = unname(quantile(boots, 0.975)),
+  proportion_positive = mean(boots > 0),
+  draws = length(boots)
+)
+kable(boot_summary, digits = 4)
+```
+
+```{r}
+stopifnot(boot_summary$ci_high < 0)
+stopifnot(boot_summary$proportion_positive == 0)
+
+bootstrap_plot <- ggplot(tibble(draw = boots), aes(draw)) +
+  geom_histogram(bins = 40, fill = "#4C78A8", color = "white") +
+  geom_vline(xintercept = 0, linewidth = 0.4) +
+  labs(
+    x = "Resampled mean of the item gap",
+    y = "Draws",
+    title = "Hierarchical bootstrap, 10,000 draws"
+  ) +
+  theme_classic(base_size = 11)
+ggsave(file.path(repo, "figures", "r_bootstrap.png"), bootstrap_plot, width = 6, height = 3.6, dpi = 150)
+bootstrap_plot
+```
+
+## 6. Exploratory: direct Japanese, and the fit that puts TIVS back
+
+The direct comparison uses the Japanese texts against the original English. It is not the confirmatory test. The last row puts the 22 TIVS items back into the back-translation model.
+
+```{r}
+bind_rows(
+  fit_h4(direct_primary) %>% mutate(analysis = "direct Japanese, TIVS removed", .before = 1),
+  robust_fit %>% mutate(analysis = "back-translation, TIVS included", .before = 1)
+) %>%
+  kable(digits = 3)
+```
+
+## 7. The scale predictor
+
+`z_s` is the mean of `\Delta` inside a scale, then standardized across the scales in the fit. Sample standard deviation uses the `n - 1` divisor. A positive value means that scale's human back-translation is closer to the original than the average scale. Item-level `z` is not the predictor of a scale rating.
+
+```{r}
+z_scales <- primary %>%
+  group_by(scale_id) %>%
+  summarise(delta_bar = mean(delta), n_items = dplyr::n(), .groups = "drop") %>%
+  mutate(z_s = as.numeric(scale(delta_bar))) %>%
+  arrange(z_s)
+
+stopifnot(abs(mean(z_scales$z_s)) < 1e-10)
+stopifnot(abs(stats::sd(z_scales$z_s) - 1) < 1e-10)
+stopifnot(nrow(z_scales) == 21)
+kable(z_scales, digits = 3)
+```
+
+
+## 8. Token cache, and which config selects the embedding
+
+Wasserstein-1 is `p = 1` and Wasserstein-2 is `p = 2`:
+
+$$W_p(P,Q)=\Big(\min_\pi\sum_{i,j}\pi_{ij}\,\|x_i-y_j\|^p\Big)^{1/p}$$
+
+A larger distance means the token clouds are farther apart. The judgment predictor uses LLM distance minus human distance, so a positive score means the human cloud is closer.
+
+The distances below are not a three-point sketch. `scripts/export_slide_cache.py` reads every stored MPNet token matrix, writes `data/published/token_item_distance.csv` for all four embedding models, and packs the primary MPNet clouds into `data/published/mpnet_primary_tokens.npz`. One item, scale 01 item 01, is also written as `token_cloud_example.csv` so this report can recompute `d_mu`, Wasserstein-1, and Wasserstein-2 and match the cache.
+
+To rebuild that cache under another embedding model, edit `configs/analysis_no_tivs.yaml` and run the Python pipeline. The confirmatory instrument stays `sentence-transformers/paraphrase-multilingual-mpnet-base-v2`. Do not choose a model because it moves the H4 estimate. A robustness model is added under `analysis_tiers.robustness.alternative_models`. Token matrices are written only when `analysis_tiers.exploratory.hara_pooling_analysis.save_token_embeddings` is true.
+
+```
+python -m h4.pipeline --config configs/analysis_no_tivs.yaml
+python -m h4.exploratory.runner --config configs/analysis_no_tivs.yaml --part pooling
+python -m h4.exploratory.runner --config configs/analysis_no_tivs.yaml --part geometry
+python scripts/export_slide_cache.py --results <results-dir> --tokens <token-dir> --embeddings <mpnet-parquet> --out data/published
+```
+
+The three path arguments are local. This report does not print them.
+
+```{r}
+published <- function(name) file.path(repo, "data", "published", name)
+dir.create(file.path(repo, "figures"), showWarnings = FALSE)
+
+tokens <- readr::read_csv(published("token_item_distance.csv"), show_col_types = FALSE) %>%
+  mutate(
+    scale_id = sprintf("%02d", as.integer(scale_id)),
+    item_id = sprintf("%02d", as.integer(item_id)),
+    in_primary = as.logical(in_primary)
+  )
+
+review_tokens <- tokens %>%
+  group_by(short_name, comparison, in_primary) %>%
+  summarise(n_items = dplyr::n(), .groups = "drop")
+kable(review_tokens)
+```
+
+```{r}
+stopifnot(nrow(tokens) == 4064)
+stopifnot(sum(tokens$short_name == "mpnet" & tokens$comparison == "back_translation" & tokens$in_primary) == 486)
+stopifnot(!any(tokens$scale_id == "11" & tokens$in_primary))
+```
+
+`lp.transport` moves integer supplies so the two clouds, which need not have the same number of tokens, have equal total mass. The objective divided by the product of the two lengths is `W_p`.
+
+```{r}
+if (!requireNamespace("lpSolve", quietly = TRUE)) {
+  stop("Install the R package lpSolve to recompute Wasserstein on the example token cloud.")
+}
+
+cloud <- readr::read_csv(published("token_cloud_example.csv"), show_col_types = FALSE)
+token_matrix <- function(field) {
+  as.matrix(cloud[cloud$field == field, grep("^d[0-9]+$", names(cloud))])
+}
+
+wasserstein_p <- function(left, right, p) {
+  n <- nrow(left)
+  m <- nrow(right)
+  cost <- matrix(0, n, m)
+  for (i in seq_len(n)) {
+    for (j in seq_len(m)) {
+      gap <- left[i, ] - right[j, ]
+      cost[i, j] <- (sqrt(sum(gap * gap)))^p
+    }
+  }
+  sol <- lpSolve::lp.transport(
+    cost, "min",
+    rep("==", n), rep(m, n),
+    rep("==", m), rep(n, m)
+  )
+  stopifnot(sol$status == 0)
+  (sol$objval / (n * m))^(1 / p)
+}
+
+unit_mean <- function(tokens_in) {
+  center <- colMeans(tokens_in)
+  tokens_in / sqrt(sum(center^2))
+}
+
+d_mu <- function(left, right) {
+  sum((colMeans(unit_mean(left)) - colMeans(unit_mean(right)))^2) / 4
+}
+
+origin <- token_matrix("original_en")
+human_cloud <- token_matrix("human_back_en")
+llm_cloud <- token_matrix("llm_back_en")
+example <- tokens %>%
+  filter(short_name == "mpnet", comparison == "back_translation", scale_id == "01", item_id == "01")
+
+recomputed <- tibble(
+  quantity = c("Wasserstein-1 human", "Wasserstein-1 LLM", "Wasserstein-2 human", "Wasserstein-2 LLM", "d_mu human", "d_mu LLM"),
+  recomputed = c(
+    wasserstein_p(origin, human_cloud, 1),
+    wasserstein_p(origin, llm_cloud, 1),
+    wasserstein_p(origin, human_cloud, 2),
+    wasserstein_p(origin, llm_cloud, 2),
+    d_mu(origin, human_cloud),
+    d_mu(origin, llm_cloud)
+  ),
+  cached = c(
+    example$distance_human, example$distance_llm,
+    example$w2_human, example$w2_llm,
+    example$d_mu_human, example$d_mu_llm
+  )
+)
+stopifnot(max(abs(recomputed$recomputed - recomputed$cached)) < 1e-5)
+kable(recomputed, digits = 4)
+```
+
+## 9. Figures used in the talk
+
+Each figure is drawn from a published table. The code is the check.
+
+### Scale means, back-translation and direct Japanese
+
+```{r, fig.width=9.05, fig.height=6.69}
+scale_panel <- mean_gap_ja$table %>%
+  filter(scale_id != "total") %>%
+  mutate(mean_delta = estimate)
+scale_both <- mean_gap_ja$plot
+scale_both
+```
+
+```{r}
+scale_panel %>%
+  group_by(comparison) %>%
+  summarise(n_negative = sum(mean_delta < 0), n_positive = sum(mean_delta > 0), .groups = "drop") %>%
+  kable()
+```
+
+### Beta densities of the cosine margins
+
+The beta curves use the stored mean and precision from the beta regression. They describe the human margin and the LLM margin. They do not replace the REML intercept.
+
+```{r}
+comparison_name <- c(back_translation = "Back-translation", direct_crosslingual = "Direct Japanese")
+beta <- readr::read_csv(published("beta_density_primary.csv"), show_col_types = FALSE) %>%
+  mutate(comparison = comparison_name[comparison])
+x_grid <- seq(0.45, 0.98, length.out = 400)
+beta_curves <- bind_rows(lapply(seq_len(nrow(beta)), function(index) {
+  row <- beta[index, ]
+  bind_rows(
+    tibble(comparison = row$comparison, version = "Human", similarity = x_grid, density = dbeta(x_grid, row$mean_human * row$precision, (1 - row$mean_human) * row$precision)),
+    tibble(comparison = row$comparison, version = "LLM", similarity = x_grid, density = dbeta(x_grid, row$mean_llm * row$precision, (1 - row$mean_llm) * row$precision))
+  )
+}))
+beta_plot <- ggplot(beta_curves, aes(similarity, density, color = version)) +
+  geom_line() +
+  facet_wrap(~comparison) +
+  labs(x = "Cosine similarity", y = "Fitted beta density", title = "MPNet cosine margins, 486 items") +
+  theme_classic(base_size = 11)
+ggsave(file.path(repo, "figures", "r_beta_density.png"), beta_plot, width = 7.2, height = 3.6, dpi = 150)
+beta_plot
+```
+
+### Specification curve
+
+```{r}
+curve <- readr::read_csv(published("specification_curve_primary.csv"), show_col_types = FALSE) %>%
+  filter(metric == "cosine") %>%
+  mutate(label = paste(short_name, comparison_name[comparison], analysis_tier, sep = " · ")) %>%
+  arrange(estimate)
+spec_plot <- ggplot(curve, aes(estimate, reorder(label, estimate), color = analysis_tier)) +
+  geom_vline(xintercept = 0, linewidth = 0.3) +
+  geom_pointrange(aes(xmin = ci_low, xmax = ci_high)) +
+  labs(x = "Hierarchical estimate of human minus LLM similarity", y = NULL, title = "Specification curve, cosine only") +
+  theme_classic(base_size = 11)
+ggsave(file.path(repo, "figures", "r_specification_curve.png"), spec_plot, width = 7.2, height = 4.2, dpi = 150)
+spec_plot
+```
+
+```{r}
+stopifnot(all(curve$ci_high < 0))
+```
+
+### Intervals gathered for the methods figure
+
+```{r}
+bootstrap_row <- readr::read_csv(published("bootstrap_primary.csv"), show_col_types = FALSE)
+methods <- bind_rows(
+  tibble(method = "REML, back-translation", estimate = primary_fit$estimate, ci_low = primary_fit$ci_low, ci_high = primary_fit$ci_high),
+  tibble(method = "Bootstrap mean, back-translation", estimate = bootstrap_row$observed_mean, ci_low = bootstrap_row$ci_low, ci_high = bootstrap_row$ci_high),
+  beta %>% transmute(method = paste("Beta mean gap,", comparison), estimate = mean_difference, ci_low, ci_high),
+  curve %>% filter(comparison == "back_translation") %>% transmute(method = paste(short_name, "REML, back-translation"), estimate, ci_low, ci_high)
+) %>%
+  distinct(method, .keep_all = TRUE)
+methods_plot <- ggplot(methods, aes(estimate, reorder(method, estimate))) +
+  geom_vline(xintercept = 0, linewidth = 0.3) +
+  geom_pointrange(aes(xmin = ci_low, xmax = ci_high)) +
+  labs(x = "Human minus LLM", y = NULL, title = "Recorded intervals on the 21-scale table") +
+  theme_classic(base_size = 11)
+ggsave(file.path(repo, "figures", "r_methods_forest.png"), methods_plot, width = 7.2, height = 4.2, dpi = 150)
+methods_plot
+```
+
+### Hara distances and the Wasserstein comparison
+
+The Wasserstein coefficient table was fit on the item table that still includes TIVS. The scatter below is the same full MPNet cache. `in_primary` marks the 486 items used in the confirmatory fit.
+
+```{r}
+mpnet_tokens <- tokens %>% filter(short_name == "mpnet")
+token_long <- bind_rows(
+  mpnet_tokens %>% transmute(comparison = comparison_name[comparison], version = "Human", d_mu = d_mu_human, d_sigma = d_sigma_human),
+  mpnet_tokens %>% transmute(comparison = comparison_name[comparison], version = "LLM", d_mu = d_mu_llm, d_sigma = d_sigma_llm)
+)
+token_plot <- ggplot(token_long, aes(d_mu, d_sigma, color = version)) +
+  geom_point(size = 1.1, alpha = 0.55) +
+  facet_wrap(~comparison) +
+  labs(x = "Mean distance d_mu", y = "Second-order distance d_sigma", title = "MPNet token distances, 508 items") +
+  theme_classic(base_size = 11)
+ggsave(file.path(repo, "figures", "r_token_distances.png"), token_plot, width = 7.4, height = 3.8, dpi = 150)
+token_plot
+```
+
+```{r}
+water <- readr::read_csv(published("wasserstein_comparison.csv"), show_col_types = FALSE)
+reference <- water %>% filter(predictor == "cosine_scale_z") %>% select(outcome, aic_reference = aic)
+outcome_name <- c(
+  naturalness_gap = "Naturalness",
+  expert_choice_fit_gap = "Choice fit",
+  preference = "Preference",
+  guess = "LLM guess"
+)
+predictor_name <- c(
+  cosine_scale_z = "Cosine",
+  w1_item_mean = "Wasserstein-1",
+  w2_item_mean = "Wasserstein-2"
+)
+water_gap <- water %>%
+  filter(predictor %in% names(predictor_name)) %>%
+  left_join(reference, by = "outcome") %>%
+  mutate(
+    aic_gap = aic - aic_reference,
+    outcome = outcome_name[outcome],
+    predictor = predictor_name[predictor]
+  )
+water_plot <- ggplot(water_gap, aes(aic_gap, outcome, color = predictor)) +
+  geom_vline(xintercept = 0, linewidth = 0.3) +
+  geom_point(position = position_dodge(width = 0.4), size = 2) +
+  labs(x = "AIC minus the cosine model", y = NULL, title = "Wasserstein predictors, table that still includes TIVS") +
+  theme_classic(base_size = 11)
+ggsave(file.path(repo, "figures", "r_wasserstein_aic.png"), water_plot, width = 7.2, height = 3.8, dpi = 150)
+water_plot
+```
+
+### Japanese displacement in the cached UMAP coordinates
+
+The coordinates are the 3-dimensional UMAP of each Japanese sentence vector minus the original English vector, on the 486 items. The plot uses all three axes. Each scale name is the label at that scale's centroid. Triangles are the human Japanese items. Squares are the LLM Japanese items.
+
+```{r}
+suppressPackageStartupMessages(library(plotly))
+umap_coordinates <- readr::read_csv(published("umap_ja_displacement.csv"), show_col_types = FALSE) %>%
+  mutate(scale_id = sprintf("%02d", as.integer(scale_id)), item_id = sprintf("%02d", as.integer(item_id))) %>%
+  left_join(scale_names, by = "scale_id")
+stopifnot(dplyr::n_distinct(umap_coordinates$scale_id) == 21)
+stopifnot(!any(umap_coordinates$scale_id == "11"))
+human_umap <- umap_coordinates %>% filter(text_field == "human_ja")
+llm_umap <- umap_coordinates %>% filter(text_field == "llm_ja")
+scale_centers <- umap_coordinates %>%
+  group_by(scale_id, scale_name) %>%
+  summarise(dim1 = mean(dim1), dim2 = mean(dim2), dim3 = mean(dim3), .groups = "drop")
+project_umap <- function(frame, azimuth = 0.85, elevation = 0.55) {
+  x1 <- frame$dim1 * cos(azimuth) - frame$dim2 * sin(azimuth)
+  y1 <- frame$dim1 * sin(azimuth) + frame$dim2 * cos(azimuth)
+  frame$x <- x1
+  frame$y <- y1 * sin(elevation) + frame$dim3 * cos(elevation)
+  frame
+}
+human_flat <- project_umap(human_umap)
+llm_flat <- project_umap(llm_umap)
+center_flat <- project_umap(scale_centers)
+umap_static <- ggplot() +
+  geom_point(data = human_flat, aes(x, y), shape = 17, size = 1.3, color = "#1B1B1B") +
+  geom_point(data = llm_flat, aes(x, y), shape = 15, size = 1.2, color = "#4C78A8") +
+  geom_text(data = center_flat, aes(x, y, label = scale_name), size = 2.6, nudge_y = 0.35, check_overlap = FALSE) +
+  labs(x = "Projected UMAP", y = NULL, title = "Japanese displacement, three axes, TIVS removed") +
+  theme_classic(base_size = 11) +
+  theme(axis.text = element_blank(), axis.ticks = element_blank())
+ggsave(file.path(repo, "figures", "r_umap_ja.png"), umap_static, width = 7.2, height = 6.2, dpi = 150)
+umap_plot <- plot_ly() %>%
+  add_markers(
+    data = human_umap, x = ~dim1, y = ~dim2, z = ~dim3,
+    marker = list(size = 3, symbol = "diamond", color = "#1B1B1B"),
+    name = "Human Japanese",
+    text = ~paste(scale_name, item_id),
+    hoverinfo = "text"
+  ) %>%
+  add_markers(
+    data = llm_umap, x = ~dim1, y = ~dim2, z = ~dim3,
+    marker = list(size = 3, symbol = "square", color = "#4C78A8"),
+    name = "LLM Japanese",
+    text = ~paste(scale_name, item_id),
+    hoverinfo = "text"
+  ) %>%
+  add_text(
+    data = scale_centers, x = ~dim1, y = ~dim2, z = ~dim3,
+    text = ~scale_name, textfont = list(size = 11, color = "#1B1B1B"),
+    showlegend = FALSE, hoverinfo = "none"
+  ) %>%
+  plotly::layout(
+    title = "Japanese displacement, TIVS removed",
+    scene = list(
+      xaxis = list(title = "UMAP 1"),
+      yaxis = list(title = "UMAP 2"),
+      zaxis = list(title = "UMAP 3")
+    )
+  )
+umap_plot
+```
+
+```{r}
+stopifnot(dplyr::n_distinct(umap_coordinates$scale_id) == 21)
+stopifnot(!any(umap_coordinates$scale_id == "11"))
+```
+
+## 10. Expert item checkboxes
+
+Each expert item has three checkboxes: semantic, understandability, and cultural. A row is 1 when that box was marked for that translation. The logit, fit by `scripts/fit_expert_item_flags.py` on the 21 scales, is
+
+$$\mathrm{logit}\Pr(\mathrm{flag})=\beta_0+\beta_1\mathrm{human}+\beta_2 z_i+\beta_3\mathrm{human}\times z_i+\beta_4\mathrm{AI\text{-}first}+u_p+u_s+u_i.$$
+
+`z_i` is the item's MPNet back-translation gap, standardized across the 486 primary items. Human is 1 on the human translation. AI-first is 1 when the LLM translation was answered first. The random terms are the expert, the scale, and the item. TIVS is not in this fit. The respondent file stays on the machine that runs the script. This report reads the coefficients and the rates.
+
+```{r}
+flag_rates <- readr::read_csv(published("expert_item_flag_rates.csv"), show_col_types = FALSE)
+flag_coef <- readr::read_csv(published("expert_item_flag_coef.csv"), show_col_types = FALSE)
+kable(flag_rates, digits = 3)
+```
+
+The figure has two panels. The left panel is the share of rows with the box marked. The right panel is the logit. Black intervals exclude zero. Blue intervals include zero. This is the figure on the checkbox slide.
+
+```{r}
+suppressPackageStartupMessages(library(patchwork))
+flag_labels <- c(
+  version_human = "Human translation",
+  delta_z = "Similarity gap",
+  `version_human:delta_z` = "Human x gap",
+  ai_first = "AI shown first"
+)
+dimension_order <- c("semantic", "understandability", "cultural")
+dimension_name <- c(
+  semantic = "Semantic",
+  understandability = "Understandability",
+  cultural = "Cultural"
+)
+rate_plot <- flag_rates %>%
+  mutate(
+    dimension = factor(dimension_name[dimension], levels = rev(dimension_name[dimension_order])),
+    version = ifelse(version == "human", "Human", "LLM")
+  ) %>%
+  ggplot(aes(rate * 100, dimension, fill = version)) +
+  geom_col(position = position_dodge(width = 0.7), width = 0.65) +
+  scale_fill_manual(values = c(Human = "#1B1B1B", LLM = "#4C78A8")) +
+  labs(x = "Items marked (%)", y = NULL, fill = NULL, title = "a  How often the box was marked") +
+  theme_classic(base_size = 11) +
+  theme(legend.position = "bottom")
+forest <- flag_coef %>%
+  filter(term != "(Intercept)") %>%
+  mutate(
+    excludes_zero = ci_low > 0 | ci_high < 0,
+    label = paste(dimension_name[dimension], flag_labels[term], sep = " · "),
+    label = factor(label, levels = rev(paste(
+      rep(dimension_name[dimension_order], each = 4),
+      flag_labels[c("version_human", "delta_z", "version_human:delta_z", "ai_first")],
+      sep = " · "
+    )))
+  )
+logit_plot <- ggplot(forest, aes(estimate, label, color = excludes_zero)) +
+  geom_vline(xintercept = 0, linewidth = 0.3) +
+  geom_pointrange(aes(xmin = ci_low, xmax = ci_high)) +
+  scale_color_manual(values = c(`TRUE` = "#1B1B1B", `FALSE` = "#4C78A8"), guide = "none") +
+  labs(x = "Log-odds", y = NULL, title = "b  Item-level logit, 21 scales") +
+  theme_classic(base_size = 10)
+flag_plot <- rate_plot + logit_plot + patchwork::plot_layout(widths = c(1, 1.5))
+ggsave(file.path(repo, "figures", "r_item_flags.png"), flag_plot, width = 10.6, height = 4.8, dpi = 150)
+flag_plot
+```
+
+The difference score mixes the two translations. The fits below score each translation on its own. `sim_z` is that text's cosine to the original English, standardized within version across the 486 items. A higher value means that text is closer to the original than the average item of the same version. `w1_z` is that text's Wasserstein-1 distance to the original, standardized the same way. A higher value means the token cloud is farther from the original. The formula is the same logit, with `sim_z` or `w1_z` in place of the difference score. AI-first is 0 and the random intercepts are 0.
+
+```{r}
+separate_coef <- readr::read_csv(published("expert_item_flag_separate_coef.csv"), show_col_types = FALSE)
+separate_points <- readr::read_csv(published("expert_item_flag_separate_points.csv"), show_col_types = FALSE)
+separate_status <- readr::read_csv(published("expert_item_flag_separate_status.csv"), show_col_types = FALSE)
+stopifnot(all(separate_status$n == 17924))
+stopifnot(all(!separate_status$singular))
+predictor_name <- c(sim_z = "Own similarity to the original", w1_z = "Own Wasserstein-1 distance to the original")
+curve_grid <- seq(-2.5, 2.5, length.out = 240)
+separate_curves <- separate_coef %>%
+  filter(dimension %in% c("understandability", "cultural"), term != "ai_first") %>%
+  select(dimension, predictor, term, estimate) %>%
+  tidyr::pivot_wider(names_from = term, values_from = estimate) %>%
+  crossing(score = curve_grid) %>%
+  mutate(
+    own = ifelse(predictor == "sim_z", sim_z, w1_z),
+    interaction = ifelse(predictor == "sim_z", `version_human:sim_z`, `version_human:w1_z`),
+    dimension = dimension_name[dimension],
+    predictor = predictor_name[predictor],
+    Human = plogis(`(Intercept)` + version_human + (own + interaction) * score) * 100,
+    LLM = plogis(`(Intercept)` + own * score) * 100
+  ) %>%
+  select(dimension, predictor, score, Human, LLM) %>%
+  pivot_longer(c(Human, LLM), names_to = "version", values_to = "marks")
+separate_cloud <- separate_points %>%
+  filter(dimension %in% c("understandability", "cultural")) %>%
+  mutate(dimension = dimension_name[dimension], version = ifelse(version == "human", "Human", "LLM")) %>%
+  pivot_longer(c(sim_z, w1_z), names_to = "predictor", values_to = "score") %>%
+  mutate(predictor = predictor_name[predictor], marks = rate * 100)
+separate_plot <- ggplot() +
+  geom_point(data = separate_cloud, aes(score, marks, color = version), alpha = 0.28, size = 1) +
+  geom_vline(xintercept = 0, linewidth = 0.3) +
+  geom_line(data = separate_curves, aes(score, marks, color = version), linewidth = 0.8) +
+  facet_grid(predictor ~ dimension) +
+  coord_cartesian(xlim = c(-2.5, 2.5), ylim = c(0, 40)) +
+  scale_color_manual(values = c(Human = "#1B1B1B", LLM = "#4C78A8")) +
+  labs(x = "Within-version z-score", y = "Items marked (%)", color = NULL) +
+  theme_classic(base_size = 11)
+ggsave(file.path(repo, "figures", "r_item_flag_separate.png"), separate_plot, width = 9.2, height = 7.2, dpi = 150)
+separate_plot
+```
+
+Scales on which experts rarely marked a box are set aside for that box. The rule is 20 marked boxes. Below that, the scale is treated as acceptable on that dimension and is not used in the probability model. Understandability keeps 17 scales, semantic 14, and culture 6. The z-scores stay on the 486-item scale.
+
+```{r}
+high_audit <- readr::read_csv(published("expert_item_flag_scale_audit.csv"), show_col_types = FALSE) %>%
+  mutate(scale_id = sprintf("%02d", as.integer(scale_id)))
+high_coef <- readr::read_csv(published("expert_item_flag_high_coef.csv"), show_col_types = FALSE)
+high_points <- readr::read_csv(published("expert_item_flag_high_points.csv"), show_col_types = FALSE)
+high_status <- readr::read_csv(published("expert_item_flag_high_status.csv"), show_col_types = FALSE)
+stopifnot(all(!high_status$singular))
+stopifnot(setequal(high_audit$scale_id[high_audit$dimension == "cultural" & high_audit$kept], c("01", "07", "10", "19", "20", "21")))
+high_curves <- high_coef %>%
+  filter(dimension %in% c("understandability", "cultural"), term != "ai_first") %>%
+  select(dimension, predictor, term, estimate) %>%
+  tidyr::pivot_wider(names_from = term, values_from = estimate) %>%
+  crossing(score = curve_grid) %>%
+  mutate(
+    own = ifelse(predictor == "sim_z", sim_z, w1_z),
+    interaction = ifelse(predictor == "sim_z", `version_human:sim_z`, `version_human:w1_z`),
+    dimension = dimension_name[dimension],
+    predictor = predictor_name[predictor],
+    Human = plogis(`(Intercept)` + version_human + (own + interaction) * score) * 100,
+    LLM = plogis(`(Intercept)` + own * score) * 100
+  ) %>%
+  select(dimension, predictor, score, Human, LLM) %>%
+  pivot_longer(c(Human, LLM), names_to = "version", values_to = "marks")
+high_cloud <- high_points %>%
+  filter(dimension %in% c("understandability", "cultural")) %>%
+  mutate(dimension = dimension_name[dimension], version = ifelse(version == "human", "Human", "LLM")) %>%
+  pivot_longer(c(sim_z, w1_z), names_to = "predictor", values_to = "score") %>%
+  mutate(predictor = predictor_name[predictor], marks = rate * 100)
+high_plot <- ggplot() +
+  geom_point(data = high_cloud, aes(score, marks, color = version), alpha = 0.28, size = 1) +
+  geom_vline(xintercept = 0, linewidth = 0.3) +
+  geom_line(data = high_curves, aes(score, marks, color = version), linewidth = 0.8) +
+  facet_grid(predictor ~ dimension) +
+  coord_cartesian(xlim = c(-2.5, 2.5), ylim = c(0, 40)) +
+  scale_color_manual(values = c(Human = "#1B1B1B", LLM = "#4C78A8")) +
+  labs(x = "Within-version z-score", y = "Items marked (%)", color = NULL, title = "Scales marked at least 20 times") +
+  theme_classic(base_size = 11)
+ggsave(file.path(repo, "figures", "r_item_flag_high.png"), high_plot, width = 9.2, height = 7.2, dpi = 150)
+high_plot
+```
+
+```{r}
+flag_status <- readr::read_csv(published("expert_item_flag_status.csv"), show_col_types = FALSE)
+stopifnot(all(flag_status$n == 17924))
+stopifnot(all(!flag_status$singular))
+kable(flag_coef %>% select(dimension, term, estimate, ci_low, ci_high), digits = 3)
+```
+
+Set `H4_ITEM_FLAGS` to a csv with `flagged`, `version_human`, `delta_z`, `ai_first`, `respondent_id`, `scale_id`, and `item_uid` to refit one dimension in this session. The published coefficients above are the check when that file is absent.
+
+```{r}
+flag_path <- Sys.getenv("H4_ITEM_FLAGS", unset = "")
+if (!nzchar(flag_path)) {
+  tibble(item_flags = "not set", check = "The published coefficients above are the item-flag check.") %>%
+    kable()
+} else {
+  live_flags <- readr::read_csv(flag_path, show_col_types = FALSE)
+  print(kable(tibble(
+    n_rows = nrow(live_flags),
+    n_items = dplyr::n_distinct(live_flags$item_uid),
+    n_respondents = dplyr::n_distinct(live_flags$respondent_id),
+    flag_rate = mean(live_flags$flagged)
+  )))
+  live_fit <- lme4::glmer(
+    flagged ~ version_human * delta_z + ai_first + (1 | respondent_id) + (1 | scale_id) + (1 | item_uid),
+    data = live_flags,
+    family = binomial,
+    nAGQ = 0,
+    control = lme4::glmerControl(optimizer = "bobyqa")
+  )
+  print(summary(live_fit)$coefficients)
+}
+```
+
+## 11. Judgment slopes
+
+The current exploratory analysis keeps each observed outcome. It follows the paired long-form construction in the co-author H1/H3 reports. Human is coded `x = +0.5`, LLM `x = -0.5`, and `sim` is that translation's own cosine to the original.
+
+$$\operatorname{logit}P(Y_{psv}\leq k)=\theta_k-\left[\beta_xx+\beta_z z_{sv}+\beta_{xz}xz_{sv}+b_p+b_{px}x+b_s+b_{sx}x+b_{ps}\right].$$
+
+Ratings use a cumulative logit. Preference, the guess, and flags retain their observed binary outcome. Rating and flag differences are not dependent variables.
+
+```{r}
+raw_ratings <- readr::read_csv(published("raw_rating_ordinal_n1859.csv"), show_col_types = FALSE)
+raw_choices <- readr::read_csv(published("raw_choice_logit_n1859.csv"), show_col_types = FALSE)
+raw_flags <- readr::read_csv(published("raw_flag_logit_n1859.csv"), show_col_types = FALSE)
+kable(raw_ratings %>%
+  filter(term %in% c("sim_human", "sim_llm", "x:sim")) %>%
+  select(outcome, audience, term, estimate, ci_low, ci_high), digits = 3)
+kable(raw_choices %>%
+  select(outcome, audience, term, estimate, ci_low, ci_high), digits = 3)
+kable(raw_flags %>%
+  filter(term %in% c("sim_human", "sim_llm", "x:sim")) %>%
+  select(outcome, term, estimate, ci_low, ci_high), digits = 3)
+```
+
+### Earlier difference-score sensitivity
+
+The table below is retained for reproducibility. It regresses a human-minus-LLM outcome on a human-minus-LLM similarity score and is not the current exploratory estimand.
+
+```{r}
+judgment_name <- c(
+  naturalness = "Naturalness",
+  semantic = "Expert semantic",
+  cultural_validity = "Cultural validity",
+  choice_fit = "Choice fit",
+  expert_naturalness = "Expert naturalness",
+  preference = "Preference",
+  guess = "LLM guess"
+)
+analysis_slopes <- readr::read_csv(published("judgment_slopes_n1859.csv"), show_col_types = FALSE) %>%
+  mutate(
+    excludes_zero = ci_low > 0 | ci_high < 0,
+    outcome_code = outcome,
+    outcome = judgment_name[outcome]
+  )
+primary_slopes <- analysis_slopes %>% filter(sample == "analysis_1859")
+kable(primary_slopes %>% select(outcome, estimate, ci_low, ci_high, excludes_zero, n), digits = 3)
+```
+
+```{r}
+stopifnot(sum(primary_slopes$excludes_zero) == 1)
+stopifnot(primary_slopes$outcome_code[primary_slopes$excludes_zero] == "choice_fit")
+slope_plot <- ggplot(primary_slopes, aes(estimate, reorder(outcome, estimate))) +
+  geom_vline(xintercept = 0, linewidth = 0.3) +
+  geom_pointrange(aes(xmin = ci_low, xmax = ci_high)) +
+  labs(x = "Slope on z_s", y = NULL, title = "Earlier difference-score sensitivity, 21 scales") +
+  theme_classic(base_size = 11)
+ggsave(file.path(repo, "figures", "r_judgment_slopes_n1859.png"), slope_plot, width = 6.4, height = 3.8, dpi = 150)
+slope_plot
+```
+
+```{r}
+compare_outcomes <- judgment_name[c("naturalness", "preference", "guess", "choice_fit")]
+sensitivity_slopes <- readr::read_csv(published("judgment_slopes.csv"), show_col_types = FALSE) %>%
+  mutate(
+    outcome_code = outcome,
+    outcome = judgment_name[outcome]
+  )
+compare_plot <- bind_rows(analysis_slopes, sensitivity_slopes) %>%
+  filter(outcome %in% compare_outcomes) %>%
+  ggplot(aes(estimate, outcome, color = sample)) +
+  geom_vline(xintercept = 0, linewidth = 0.3) +
+  geom_pointrange(aes(xmin = ci_low, xmax = ci_high), position = position_dodge(width = 0.5)) +
+  labs(x = "Slope on z_s", y = NULL, title = "21 scales, 22 scales, and the further check without HEEMA") +
+  theme_classic(base_size = 11)
+ggsave(file.path(repo, "figures", "r_judgment_comparison.png"), compare_plot, width = 7.2, height = 3.8, dpi = 150)
+compare_plot
+```
+
+The next chunk refits the naturalness equation only when `H4_JUDGMENTS` points at a csv with `rating_gap`, `delta_z`, `ai_first`, `expert`, `respondent_id`, and `scale_id`.
+
+```{r}
+judgment_path <- Sys.getenv("H4_JUDGMENTS", unset = "")
+if (!nzchar(judgment_path)) {
+  tibble(judgments = "not set", check = "The recorded slopes above are the judgment check.") %>%
+    kable()
+} else {
+  judgments <- readr::read_csv(judgment_path, show_col_types = FALSE)
+  print(kable(tibble(
+    n_rows = nrow(judgments),
+    n_scales = dplyr::n_distinct(judgments$scale_id),
+    n_respondents = dplyr::n_distinct(judgments$respondent_id),
+    n_missing = sum(is.na(judgments$rating_gap) | is.na(judgments$delta_z))
+  )))
+  slope <- lme4::lmer(
+    rating_gap ~ delta_z + ai_first + expert + (1 | respondent_id) + (1 | scale_id),
+    data = judgments,
+    REML = TRUE
+  )
+  print(summary(slope)$coefficients)
+}
+```

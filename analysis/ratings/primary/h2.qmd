@@ -1,0 +1,1088 @@
+---
+title: "仮説2 主分析(除外基準3なし)"
+date: today
+date-format: "YYYY-MM-DD"
+format:
+  html:
+    toc: true
+    toc-depth: 4
+    toc-location: left
+    number-sections: true
+    embed-resources: true
+  pdf:
+    pdf-engine: lualatex
+    documentclass: ltjsarticle
+    papersize: a4
+    geometry: margin=15mm
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    include-in-header:
+      text: |
+        % 表を小さめの文字にして横幅に収める
+        \AtBeginEnvironment{longtable}{\scriptsize}
+        % 長いコードの行を折り返す
+        \usepackage{fvextra}
+        \DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,commandchars=\\\{\}}
+---
+
+## 目的
+
+仮説 2 LLM 翻訳版と人手翻訳版を実際に使用して人を対象とした調査を行った際，尺度の統計的
+特徴において違いがあるかどうかを検証する。
+
+仮説 2-1：尺度の構造的妥当性として尺度の背景理論 (原論文) に基づく確認的因子分析を行い，モ
+デル適合度に基づいて両者を比較した場合，LLM 版も人手翻訳版もいずれも適合基準を満たす値が
+得られると予想される。
+
+仮説 2-2：尺度の実用的特徴として因子得点を算出し，LLM 版と人手翻訳版を比較するが，平均点
+に統計的な差はみられないだろう。また尺度得点間の相関係数は 0.80 を超える高い相関が見られる
+と予想される。なおこの基準は，翻訳手法間の比較に関する確立された基準が存在しないため，研
+究チームの合議により事前に設定した。この値は，心理測定における並行検査信頼性の許容水準
+(e.g., Koo & Li, 2016) を参考としたものであり，両版の得点が分散の 64%を共有することを意味す
+る。
+
+これらの仮説に加え，探索的に尺度を分析し，LLM 版と人手翻訳版の記述的統計量の分析を行
+う。LLM 版と人手尺度版のいずれにおいても，内的整合性の観点からはなんらかを測定するもので
+あることは示されると予想される。これに加えて，探索的因子分析を行い，因子数や因子負荷量の
+値など，測定不変性の水準において同等かどうかを段階的に評価する。続いて確認的因子分析や尺
+度得点の算出を行い，その差異を検証する。
+
+
+## 結果の要約 {#sec-summary}
+
+結果が多いので，はじめに全体を要約する。詳細は各節を参照。
+
+```{r}
+#| label: summary-compute
+#| echo: false
+#| message: false
+#| warning: false
+#| ref.label: [setup, rel-compute, cfa-fit, cfa-judge, cfa-note-labels, inv-judge, pa-judge, score-compute]
+```
+
+```{r}
+#| label: tbl-summary
+#| tbl-cap: "結果の要約(主分析 WLSMV。IDAS-II を含む21尺度)"
+#| echo: false
+# 「a/b(c%)」の形の文字列を作る
+frac <- function(a, b) sprintf("%d/%d(%.0f%%)", a, b, 100 * a / b)
+
+n_scale <- dplyr::n_distinct(key_h2$scale_id)
+
+# 内的整合性: 1次因子の得点
+rel_f <- rel_wide |> dplyr::filter(level == "因子")
+n_rel <- nrow(rel_f)
+
+# 版ごとの CFA
+cfa_w <- cfa_wide |> dplyr::filter(estimator == "WLSMV")
+
+# 平行分析(ポリコリック・因子分析版)
+pa_p <- pa_wide |> dplyr::filter(cor_type == "polychoric")
+
+# 測定不変性: IDAS-II は上位区分の3モデルすべてが到達したときに到達とみなす
+inv_w <- inv_level |> dplyr::filter(estimator == "WLSMV")
+top_step <- "閾値＋負荷の等値"
+n_inv_full <- sum(inv_w$group == "all" & inv_w$scale_id != 1L & inv_w$reached == top_step) +
+  as.integer(all(inv_w$reached[inv_w$scale_id == 1L & inv_w$group != "all"] == top_step))
+
+# 得点の比較: 1次因子の得点
+cmp_f <- compare_h2 |> dplyr::filter(level == "因子")
+n_cmp <- nrow(cmp_f)
+
+tibble::tribble(
+  ~観点, ~数え方, ~結果,
+  "[尺度として使えるか(内的整合性)](#sec-alpha)",
+  "1次因子の得点のうち，両版とも α が基準(α > .80。原論文の α が .80 未満ならその値)を満たす",
+  sprintf("%s。人手版では %s，AI版では %s",
+          frac(sum(rel_f$pass_alpha_human & rel_f$pass_alpha_ai), n_rel),
+          frac(sum(rel_f$pass_alpha_human), n_rel), frac(sum(rel_f$pass_alpha_ai), n_rel)),
+  "[因子構造が両版で同じか(CFA)](#sec-cfa)",
+  "原論文の因子構造を版ごとに当て，両版とも適合度の基準を満たし不適解でない尺度",
+  sprintf("%s。片方の版だけ満たす尺度は %d",
+          frac(sum(cfa_w$result == "両版で満たす"), n_scale),
+          sum(cfa_w$result %in% c("人手版のみ", "AI版のみ"))),
+  "[因子構造が両版で同じか(平行分析)](#sec-parallel)",
+  "平行分析(ポリコリック相関・因子分析版)が示す因子数が両版で一致する尺度。原論文の因子数との一致は問わない",
+  # 乱数の種を10通り変えた確認(R/h2_平行分析_種の安定性.md)では一致数が15〜17だった
+  paste0(frac(sum(pa_p$same_fa == "一致"), n_scale), "。乱数の種を変えると15〜17"),
+  "[測定不変か](#sec-invariance)",
+  "両版を1つのモデルに入れ，閾値＋負荷の等値の段まで基準を満たした尺度(IDAS-II は上位区分ごとのモデルで判断)",
+  frac(n_inv_full, n_scale),
+  "[得点に差がないか](#sec-compare)",
+  "1次因子の得点のうち，BF01 > 3 で差なしを支持したもの",
+  sprintf("%s。決着せず(BF の大きさが十分でない)は %s，差ありを支持(BF01 < 1/3)は %s",
+          frac(sum(cmp_f$bf_result == "差なしを支持"), n_cmp),
+          frac(sum(cmp_f$bf_result == "決着せず"), n_cmp),
+          frac(sum(cmp_f$bf_result == "差ありを支持"), n_cmp)),
+  "[個人の順位が一致するか](#sec-compare)",
+  "1次因子の得点のうち，両版の得点の相関が r ≥ .80",
+  frac(sum(cmp_f$high_agreement), n_cmp)
+) |>
+  knitr::kable()
+```
+
+## 準備
+
+データは`data/4_Rdata/ManyScales_long.Rdata` の `citizen_long`を読み込む。
+分析に必要な関数は`R/hypothesis_2_functions.R`にまとめ，ここではそれを呼び出すだけにしている。
+仮説2-1の測定不変性の検討と平行分析は計算量が多いため，分析結果をまとめたrdsファイルから読み込んだものを使っている。
+
+回答者は全員，人手翻訳版と LLM 翻訳版の両方に回答している。逆転項目はデータの段階で処理済みである。
+項目と因子の対応は `R/h2_item_key_draft.csv`(`R/prepare_item_key.R` で作成)にまとめた。対象尺度 xlsx の因子欄を原典で確かめ，次の尺度は原典に合わせた。
+
+- MPS: 作者公開の採点キー(xlsx の因子欄が原論文と合わない)
+- MEMI: 原論文の付録(xlsx の因子欄が空欄)
+- BTPS: 原論文の補足資料。調査票の項目の並びが論文と違うため英文の中身で照合した
+- NARQ: 原論文の Table 1(1次6因子・2次2因子)
+- MOS: 原論文(8・9番は行動的思考。xlsx は情動反応で誤っていた)
+- IDAS-II: 原著者が配布する採点キー(99項目 → 18下位尺度)。xlsx の上位3因子は使わない
+
+なお，TIVS は英語の原文が原論文と異なる改変版だったため，リードチームの決定で分析から除外した。対象は21尺度である。
+
+
+```{r}
+#| label: setup
+#| eval: false
+#| message: false
+#| warning: false
+# (このチャンクは冒頭の「結果の要約」で ref.label により実行済み。ここではコードを示すだけ)
+pacman::p_load(tidyverse, lavaan, semTools, psych, BayesFactor, knitr)
+
+# データ・項目と因子の対応表・仮説2の関数を読み込む
+load("data/4_Rdata/ManyScales_long.Rdata")
+item_key <- readr::read_csv("R/h2_item_key_draft.csv", show_col_types = FALSE)
+source("R/hypothesis_2_functions.R")
+
+# 分析から外す尺度(11 = TIVS)
+scales_excluded <- c(11L)
+
+# 仮説2で使う対応表(TIVS を除く)
+key_h2 <- item_key |>
+  dplyr::filter(!scale_id %in% scales_excluded)
+
+# 表の表示に使う関数 --------------------------------------------------------
+# 6つ全部の列に使う ○/×
+mark <- function(ok) dplyr::if_else(ok, "○", "×")
+# 指標の値のセル: 基準を満たす値は太字にする(Markdown の **)
+# digits: 小数点以下の桁数(SRMR は基準 .08 の近くで3桁だと見分けられないので4桁にする)
+cell <- function(x, ok, digits = 3) {
+  fmt <- paste0("%.", digits, "f")
+  out <- dplyr::case_when(
+    is.na(x) ~ "-",
+    ok ~ sprintf(paste0("**", fmt, "**"), x),
+    TRUE ~ sprintf(fmt, x)
+  )
+  return(out)
+}
+```
+
+### 対象尺度
+
+```{r}
+#| label: tbl-scales
+#| tbl-cap: "仮説2の対象尺度"
+# 尺度ごとの項目数・1次因子の数・上位因子の数
+scale_info <- key_h2 |>
+  dplyr::summarise(
+    n_item = dplyr::n(),
+    n_factor = dplyr::n_distinct(factor),
+    n_upper = dplyr::n_distinct(factor_upper, na.rm = TRUE),
+    .by = c(scale_id, abbr)
+  )
+
+# 尺度ごとの回答者数(両版とも同じ人数)
+scale_n <- citizen_long |>
+  dplyr::filter(!scale_id %in% scales_excluded) |>
+  dplyr::summarise(n = dplyr::n_distinct(subject_id), .by = scale_id)
+
+scale_info |>
+  dplyr::left_join(scale_n, by = "scale_id") |>
+  dplyr::arrange(scale_id) |>
+  knitr::kable(col.names = c("ID", "尺度", "項目数", "1次因子の数", "上位因子の数", "回答者数"))
+```
+
+
+## 分析2-0: 内的整合性の評価 {#sec-alpha}
+
+各尺度について，クロンバックの$\alpha$係数および$\omega$係数を算出する。
+
+- $\omega$ は1次因子ごとに，版ごとの CFA(WLSMV)の標準化負荷 $\lambda$ から $(\sum\lambda)^2 / ((\sum\lambda)^2 + \sum(1-\lambda^2))$ で求めた。分母はモデルが示す和得点の分散である。
+- 項目を順序変数として推定した負荷なので，この $\omega$ は観測された和得点の信頼性ではなく，潜在反応変数の上での値(順序 $\omega$)である。
+- WLSMV の CFA が推定できない・収束しない・不適解の版は，代わりに MLR(項目を連続変数として扱う)の CFA の標準化負荷から同じ式で求め，表では $\omega$ にダガー(†)を付けた。順序 $\omega$ ではないラフな値だが，値がないよりは情報になるためである。MLR でも不適解のときは，不適解のままの WLSMV の当てはめの標準化負荷から求め，ダブルダガー(‡)を付けた。因子ごとの $\omega$ の式には因子間相関が入らないので，因子間相関が1を超える不適解でも値は計算できるが，参考値である。CFA が推定できない・収束しないときだけ $\omega$ を出さない。
+
+```{r}
+#| label: rel-compute
+#| eval: false
+# (このチャンクは冒頭の「結果の要約」で ref.label により実行済み。ここではコードを示すだけ)
+#| warning: false
+# α と ω を出す得点
+# 1次因子: 全尺度 / 上位因子: NARQ(3)・BTPS(5)・TCI(13) / 総合得点(全項目): IDAS-II(1)・MCS(10)・MEMI(18)・PSTI(19)
+rel_targets <- dplyr::bind_rows(
+  tidyr::expand_grid(scale_id = sort(unique(key_h2$scale_id)), level = "factor"),
+  tidyr::expand_grid(scale_id = c(3L, 5L, 13L), level = "upper"),
+  tidyr::expand_grid(scale_id = c(1L, 10L, 18L, 19L), level = "total")
+) |>
+  tidyr::expand_grid(version = c("human", "ai"))
+
+# 得点×版ごとに α(psych::alpha の raw_alpha)と ω(1次因子のみ。WLSMV の CFA の標準化負荷から)を出す
+rel <- rel_targets |>
+  purrr::pmap(\(scale_id, level, version) {
+    return(reliability_one(citizen_long, key_h2, scale_id, version, level))
+  }) |>
+  dplyr::bind_rows()
+
+# 原論文の α(R/h2_alpha_original.csv)
+alpha_original <- readr::read_csv(
+  "R/h2_alpha_original.csv",
+  show_col_types = FALSE,
+  col_types = readr::cols(alpha_original = "d", omega_original = "d", .default = "c")
+) |>
+  dplyr::mutate(scale_id = as.integer(scale_id)) |>
+  dplyr::select(scale_id, level, score_name, alpha_original)
+
+# 判定(IPA): α > .80。原論文の α が .80 に届かない得点は原論文の α を基準にする(空欄は .80)
+rel_judged <- rel |>
+  dplyr::left_join(alpha_original, by = c("scale_id", "level", "score_name")) |>
+  dplyr::mutate(
+    criterion = dplyr::if_else(!is.na(alpha_original) & alpha_original < .80, alpha_original, .80),
+    pass_alpha = alpha > criterion
+  )
+
+# 版を横に並べる
+rel_wide <- rel_judged |>
+  dplyr::mutate(
+    alpha_cell = cell(alpha, pass_alpha),
+    omega_cell = dplyr::case_when(
+      is.na(omega) ~ "-",
+      omega_method == "MLR" ~ sprintf("%.3f†", omega),
+      omega_method == "WLSMV_improper" ~ sprintf("%.3f‡", omega),
+      TRUE ~ sprintf("%.3f", omega)
+    )
+  ) |>
+  dplyr::select(scale_id, abbr, level, score_name, n_item, alpha_original, criterion, version,
+                alpha_cell, omega_cell, pass_alpha) |>
+  tidyr::pivot_wider(names_from = version, values_from = c(alpha_cell, omega_cell, pass_alpha)) |>
+  dplyr::mutate(
+    level = factor(level, levels = c("factor", "upper", "total"), labels = c("因子", "上位因子", "総合")),
+    alpha_original = dplyr::if_else(is.na(alpha_original), "-", sprintf("%.2f", alpha_original)),
+    both = dplyr::if_else(pass_alpha_human & pass_alpha_ai, "満たす", "満たさない")
+  ) |>
+  dplyr::arrange(scale_id, level, score_name)
+```
+
+```{r}
+#| label: tbl-rel
+#| tbl-cap: "内的整合性(α と ω)。太字は基準を満たす α。ω は1次因子のみ。† は WLSMV の CFA が不適解などのため MLR の CFA から求めた ω。‡ は MLR でも不適解のため，不適解のままの WLSMV の CFA から求めた参考値(@tbl-rel-omega-dropped)"
+rel_wide |>
+  dplyr::select(abbr, level, score_name, n_item, alpha_original, criterion,
+                alpha_cell_human, omega_cell_human, alpha_cell_ai, omega_cell_ai, both) |>
+  knitr::kable(
+    col.names = c("尺度", "水準", "得点", "項目数", "原論文の α", "基準",
+                  "人手版 α", "人手版 ω", "AI版 α", "AI版 ω", "両版"),
+    digits = 2,
+    align = c("l", "l", "l", rep("r", 7), "l")
+  )
+```
+
+```{r}
+#| label: tbl-rel-omega-dropped
+#| tbl-cap: "WLSMV の CFA で ω を出せなかった尺度と版(推定できない・収束しない・不適解のもの)。MLR の CFA から求めたものは †，MLR でも不適解で WLSMV の値をそのまま示したものは ‡ を表の ω に付けた"
+# reliability_one が omega_note に残した理由を，尺度×版ごとに1行にする
+rel |>
+  dplyr::filter(level == "factor", !is.na(omega_note), omega_note != "") |>
+  dplyr::distinct(scale_id, abbr, version, omega_note, omega_method, omega_note_mlr) |>
+  dplyr::mutate(version = dplyr::if_else(version == "human", "人手版", "AI版")) |>
+  dplyr::arrange(scale_id, dplyr::desc(version)) |>
+  dplyr::mutate(fallback = dplyr::case_when(
+    omega_method == "MLR" ~ "MLR で算出(†)",
+    omega_method == "WLSMV_improper" ~ paste0("WLSMV の値を参考に示す(‡。MLR も ", omega_note_mlr, ")"),
+    TRUE ~ paste0("出さない(MLR も ", omega_note_mlr, ")")
+  )) |>
+  dplyr::select(abbr, version, omega_note, fallback) |>
+  knitr::kable(col.names = c("尺度", "版", "WLSMV での理由", "ω の扱い"))
+```
+
+```{r}
+#| label: tbl-rel-count
+#| tbl-cap: "内的整合性の判定の集計"
+rel_wide |>
+  dplyr::mutate(result = dplyr::case_when(
+    pass_alpha_human & pass_alpha_ai ~ "両版で満たす",
+    pass_alpha_human ~ "人手版のみ",
+    pass_alpha_ai ~ "AI版のみ",
+    TRUE ~ "両版とも満たさない"
+  )) |>
+  dplyr::count(level, result) |>
+  tidyr::pivot_wider(names_from = level, values_from = n, values_fill = 0) |>
+  knitr::kable(col.names = c("判定", "因子", "上位因子", "総合"))
+```
+
+## 仮説2-1: 確認的因子分析
+
+仮説 2-1：尺度の構造的妥当性として尺度の背景理論 (原論文) に基づく確認的因子分析を行い，モデル適合度に基づいて両者を比較した場合，LLM 版も人手翻訳版もいずれも適合基準を満たす値が得られると予想される。
+
+
+- 原論文の因子構造(完全単純構造)を版ごとに当てる。lavaan の `cfa()` を用い，因子の分散を1に固定して識別した(`std.lv = TRUE`)。
+- 推定法は IPA に指定がないので，主分析を WLSMV(項目を順序変数として扱う)とし，MLR(連続扱い)を感度分析として併記する。
+  + WLSMV はポリコリック相関係数に DWLS で当てはめる推定法で，検定統計量に平均と分散を合わせる補正(scaled)をかける。
+  + MLR は推定値は最尤法と同じで，標準誤差をサンドイッチ型で，$\chi^2$ 値を尺度化係数で補正する。データが多変量正規分布から外れると，通常の標準誤差は小さく，$\chi^2$ 値は大きく偏りがちなためである。
+  + どちらの推定法でも，適合度には補正後(scaled)の $\chi^2$・CFI・RMSEA を用いた。SRMR は補正しない。
+- 階層のある尺度(NARQ・BTPS・TCI)は1次因子のモデルを当てる
+- 基準(IPA): $\chi^2/df < 3$，CFI $\ge .95$，SRMR $\le .08$。
+  + 3つとも満たし，さらに収束していて不適解でないものを「基準を満たす」とする
+- 不適解: 1を超える標準化負荷，負の誤差分散，絶対値1以上の因子間相関，潜在変数の共分散行列が正定値でない。不適解は基準を満たさないものとして数え，中身を注に残す
+- 因子間相関が .99 を超えるが1未満のものは，判定は変えずに注を付ける(2因子の弁別性が低い)
+- IDAS-II は18下位尺度をまとめたモデルが WLSMV で両版とも不適解(潜在変数の共分散行列が正定値でない)になるので，原論文の上位3因子の区分(心理的苦痛・強迫/恐怖・ポジティブ気分)ごとに分けて当てたモデルを併記する。分けたモデルは区分の違う下位尺度どうしの相関を推定しない
+
+
+### 版ごとのCFA {#sec-cfa}
+
+```{r}
+#| label: cfa-fit
+#| eval: false
+# (このチャンクは冒頭の「結果の要約」で ref.label により実行済み。ここではコードを示すだけ)
+#| warning: false
+# 尺度×版×推定法の組み合わせ(TIVS を除く21尺度×2版×2推定法)
+cfa_grid <- tidyr::expand_grid(
+  scale_id = sort(unique(key_h2$scale_id)),
+  version = c("human", "ai"),
+  estimator = c("WLSMV", "MLR")
+)
+
+# すべての組み合わせで CFA を当て，適合度を1行ずつ集める
+cfa_fit <- cfa_grid |>
+  purrr::pmap(\(scale_id, version, estimator) {
+    return(fit_one(citizen_long, key_h2, scale_id, version, estimator))
+  }) |>
+  dplyr::bind_rows() |>
+  dplyr::left_join(key_h2 |> dplyr::distinct(scale_id, abbr), by = "scale_id") |>
+  dplyr::relocate(abbr, .after = scale_id)
+```
+
+```{r}
+#| label: cfa-judge
+#| eval: false
+# (このチャンクは冒頭の「結果の要約」で ref.label により実行済み。ここではコードを示すだけ)
+# 判定
+# ok_index: 適合度の3基準(χ²/df < 3，CFI ≥ .95，SRMR ≤ .08)をすべて満たす
+# pass    : ok_index かつ収束しており不適解でない
+# fcor_note: 不適解ではないが因子間相関が .99 を超えるものに付ける注(判定は変えない)
+fcor_note_cut <- .99
+
+cfa_judged <- cfa_fit |>
+  dplyr::mutate(
+    chisq_df = chisq / df,
+    ok_index = chisq_df < 3 & cfi >= .95 & srmr <= .08,
+    pass = ok_index & converged & !heywood,
+    fcor_note = dplyr::if_else(
+      !heywood & !is.na(max_fcor) & max_fcor > fcor_note_cut,
+      sprintf("因子間相関 %s = %.4f", max_fcor_pair, max_fcor),
+      ""
+    )
+  )
+
+
+cfa_marked <- cfa_judged |>
+  dplyr::mutate(
+    ok_chisq_df = dplyr::coalesce(chisq_df < 3, FALSE),
+    ok_cfi = dplyr::coalesce(cfi >= .95, FALSE),
+    ok_srmr = dplyr::coalesce(srmr <= .08, FALSE),
+    # 3指標のうち基準を満たした数
+    n_clear = ok_chisq_df + ok_cfi + ok_srmr,
+    chisq_df_cell = cell(chisq_df, ok_chisq_df),
+    cfi_cell = cell(cfi, ok_cfi),
+    srmr_cell = cell(srmr, ok_srmr, digits = 4),
+    clear_cell = sprintf("%d/3", n_clear)
+  )
+
+# 版を横に並べた表(推定法ごと)
+cfa_wide <- cfa_marked |>
+  dplyr::select(scale_id, abbr, estimator, version, chisq_df_cell, cfi_cell, srmr_cell, clear_cell,
+                n_clear, heywood, pass) |>
+  tidyr::pivot_wider(
+    names_from = version,
+    values_from = c(chisq_df_cell, cfi_cell, srmr_cell, clear_cell, n_clear, heywood, pass)
+  ) |>
+  dplyr::mutate(
+    # 両版の3指標がすべて基準を満たすか(適合度だけで判断)
+    all6 = mark(n_clear_human == 3 & n_clear_ai == 3),
+    # 不適解がどちらの版にあるか
+    improper = dplyr::case_when(
+      heywood_human & heywood_ai ~ "両版",
+      heywood_human ~ "人手版",
+      heywood_ai ~ "AI版",
+      TRUE ~ "なし"
+    ),
+    # 正式な判定(適合度の基準を満たし，かつ収束・不適解なし)。集計の表に使う
+    result = dplyr::case_when(
+      pass_human & pass_ai ~ "両版で満たす",
+      pass_human ~ "人手版のみ",
+      pass_ai ~ "AI版のみ",
+      TRUE ~ "両版とも満たさない"
+    )
+  ) |>
+  dplyr::arrange(scale_id)
+
+# 表の列の並びと見出し(推定法ごとの表で共通に使う)
+cfa_cols <- c("abbr",
+              "chisq_df_cell_human", "cfi_cell_human", "srmr_cell_human", "clear_cell_human",
+              "chisq_df_cell_ai", "cfi_cell_ai", "srmr_cell_ai", "clear_cell_ai",
+              "all6", "improper")
+cfa_colnames <- c("尺度",
+                  "人手版 χ²/df", "人手版 CFI", "人手版 SRMR", "人手版 クリア",
+                  "AI版 χ²/df", "AI版 CFI", "AI版 SRMR", "AI版 クリア",
+                  "6つ全部", "不適解")
+```
+
+```{r}
+#| label: tbl-cfa-wlsmv
+#| tbl-cap: "版ごとのCFA(WLSMV)。太字は基準を満たす値"
+# 版ごとの CFA の表(推定法ごと)。MLR は最後の節で同じ関数を使う
+cfa_table <- function(est) {
+  out <- cfa_wide |>
+    dplyr::filter(estimator == est) |>
+    dplyr::select(dplyr::all_of(cfa_cols)) |>
+    knitr::kable(col.names = cfa_colnames, align = c("l", rep("r", 8), "c", "c"))
+  return(out)
+}
+cfa_table("WLSMV")
+```
+
+
+```{r}
+#| label: tbl-cfa-count
+#| tbl-cap: "版ごとのCFAの判定の集計(WLSMV)"
+# 判定の集計(推定法ごと)
+cfa_count_table <- function(est) {
+  out <- cfa_wide |>
+    dplyr::filter(estimator == est) |>
+    dplyr::mutate(result = factor(result, levels = c("両版で満たす", "人手版のみ", "AI版のみ", "両版とも満たさない"))) |>
+    dplyr::count(result, .drop = FALSE) |>
+    knitr::kable(col.names = c("判定", "尺度数"))
+  return(out)
+}
+cfa_count_table("WLSMV")
+```
+
+### 注：不適解と因子間相関がでた尺度一覧
+
+```{r}
+#| label: cfa-note-labels
+#| eval: false
+# (このチャンクは冒頭の「結果の要約」で ref.label により実行済み。ここではコードを示すだけ)
+# 表示用の列を足す関数(3.2 と 3.3 の表で使う)
+# version_label: 版の表示名 / index_label: 3指標のうち基準を満たさなかったもの(すべて満たせば「なし」)
+# improper_label: 不適解の中身(なければ「なし」) / pass_label: 正式な判定
+add_labels <- function(df) {
+  idx_names <- c("χ²/df", "CFI", "SRMR")
+  # 版の列があるかを mutate の外で調べる(mutate の中では df が自由度の列 df と取り違えられるため)
+  has_version <- "version" %in% names(df)
+  out <- df |>
+    dplyr::mutate(
+      ok_chisq_df = dplyr::coalesce(chisq_df < 3, FALSE),
+      ok_cfi = dplyr::coalesce(cfi >= .95, FALSE),
+      ok_srmr = dplyr::coalesce(srmr <= .08, FALSE),
+      n_clear = ok_chisq_df + ok_cfi + ok_srmr,
+      # 版の列がない表(測定不変性など)では NA にする
+      version_label = if (has_version) dplyr::if_else(version == "human", "人手版", "AI版") else NA_character_,
+      unmet = purrr::pmap_chr(list(ok_chisq_df, ok_cfi, ok_srmr), \(a, b, c) {
+        return(paste(idx_names[!c(a, b, c)], collapse = "，"))
+      }),
+      index_label = dplyr::if_else(n_clear == 3, "なし", unmet),
+      improper_label = dplyr::if_else(improper_note == "", "なし", improper_note),
+      pass_label = dplyr::if_else(pass, "満たす", "満たさない")
+    )
+  return(out)
+}
+
+cfa_noted <- add_labels(cfa_judged)
+```
+
+```{r}
+#| label: tbl-cfa-improper
+#| tbl-cap: "不適解の一覧(WLSMV。基準を満たさないものとして数えた)"
+# 不適解の一覧(推定法ごと)
+improper_table <- function(est) {
+  out <- cfa_noted |>
+    dplyr::filter(estimator == est, heywood) |>
+    dplyr::arrange(scale_id, dplyr::desc(version)) |>
+    dplyr::select(abbr, version_label, index_label, improper_note) |>
+    knitr::kable(col.names = c("尺度", "版", "満たさない指標", "不適解の中身"))
+  return(out)
+}
+improper_table("WLSMV")
+```
+
+```{r}
+#| label: tbl-cfa-highcor
+#| tbl-cap: "不適解ではないが因子間相関が .99 を超えるもの(WLSMV。判定は変えない)"
+# 因子間相関の注の一覧(推定法ごと)
+highcor_table <- function(est) {
+  out <- cfa_noted |>
+    dplyr::filter(estimator == est, fcor_note != "") |>
+    dplyr::arrange(scale_id, dplyr::desc(version)) |>
+    dplyr::select(abbr, version_label, pass_label, fcor_note) |>
+    knitr::kable(col.names = c("尺度", "版", "基準", "注"))
+  return(out)
+}
+highcor_table("WLSMV")
+```
+
+### IDAS-II の上位区分ごとのCFA
+
+```{r}
+#| label: cfa-idas-split
+#| warning: false
+# 原論文の上位3因子の区分(各下位尺度の全項目が同じ区分に入っていることを確認済み)
+# group_en は測定不変性の結果(rds)に保存する区分名(inv-judge の group_labels の名前と同じ)
+idas_groups <- tibble::tribble(
+  ~group, ~group_en, ~factor,
+  "心理的苦痛", "Distress", c("Dysphoria", "Lassitude", "Insomnia", "Suicidality", "Appetite Loss", "Appetite Gain",
+                "Ill Temper", "Mania", "Panic", "Traumatic Intrusions", "Traumatic Avoidance"),
+  "強迫/恐怖", "Obsessions/Fear", c("Social Anxiety", "Claustrophobia", "Checking", "Ordering", "Cleaning"),
+  "ポジティブ気分", "Positive Mood", c("Well-Being", "Euphoria")
+) |>
+  tidyr::unnest(factor)
+
+# 区分×版×推定法ごとに，その区分の下位尺度だけで CFA を当てる
+cfa_idas_split <- tidyr::expand_grid(
+  group = unique(idas_groups$group),
+  version = c("human", "ai"),
+  estimator = c("WLSMV", "MLR")
+) |>
+  purrr::pmap(\(group, version, estimator) {
+    key_g <- key_h2 |>
+      dplyr::filter(scale_id == 1L, factor %in% idas_groups$factor[idas_groups$group == group])
+    res <- fit_one(citizen_long, key_g, 1L, version, estimator) |>
+      dplyr::mutate(group = group, .after = scale_id)
+    return(res)
+  }) |>
+  dplyr::bind_rows() |>
+  dplyr::mutate(
+    chisq_df = chisq / df,
+    ok_index = chisq_df < 3 & cfi >= .95 & srmr <= .08,
+    pass = ok_index & converged & !heywood
+  )
+```
+
+```{r}
+#| label: tbl-cfa-idas-split
+#| tbl-cap: "IDAS-II の上位区分ごとのCFA(WLSMV)。太字は基準を満たす値"
+# IDAS-II の上位区分ごとの表(推定法ごと)
+idas_split_table <- function(est) {
+  out <- add_labels(cfa_idas_split) |>
+    dplyr::filter(estimator == est) |>
+    dplyr::mutate(group = factor(group, levels = unique(idas_groups$group))) |>
+    dplyr::arrange(group, dplyr::desc(version)) |>
+    dplyr::mutate(
+      chisq_df = cell(chisq_df, ok_chisq_df),
+      cfi = cell(cfi, ok_cfi),
+      srmr = cell(srmr, ok_srmr, digits = 4)
+    ) |>
+    dplyr::select(group, version_label, n_factor, n_item, chisq_df, cfi, srmr, improper_label, pass_label) |>
+    knitr::kable(
+      col.names = c("区分", "版", "因子数", "項目数", "χ²/df", "CFI", "SRMR", "不適解", "基準"),
+      align = c("l", "l", "r", "r", "r", "r", "r", "l", "l")
+    )
+  return(out)
+}
+idas_split_table("WLSMV")
+```
+
+### 不変性の確認 {#sec-invariance}
+
+IPAでは「構造不変，測定不変のどの水準まで一致しているかを検証できる」としたので，これらを検証する。
+
+IPA の「同じ項目の翻訳間に等値制約を置いたモデルと置かないモデル」に従い，制約を段階的に強めて，各段が適合度の基準を満たすかを見る。IPA の「構造不変」は配置不変(因子の数と項目の割り当てが両版で同じ)と読む。
+
+  + WLSMV: 配置不変 → 閾値の等値 → 閾値＋負荷の等値(順序データの手順。Wu & Estabrook, 2016)
+  + MLR: 配置不変 → 負荷の等値 → 負荷＋切片の等値
+
+- 人手版とAI版は参加者内なので，同じ項目の誤差同士に相関を置く。構造は版ごとの CFA と同じ1次因子を対象とする。
+- semTools の `measEq.syntax()` でモデルを作り lavaan で当てる(関数 `fit_invariance()`)
+- 各段に版ごとの CFA と同じ基準($\chi^2$/df，CFI，SRMR，不適解)を当て，配置不変から途切れずに基準を満たした最も上の段を「到達した水準」とする。ΔCFI とカイ二乗差検定は参考として示す
+- WLSMV では，同じ項目の両版で使われた選択肢が違うとモデルが組めないので，一方の版でしか使われていない選択肢を，両版で使われている最も近い選択肢に併合した(11尺度・38項目・39件。一覧は `R/h2_category_collapse.md`)。併合は測定不変性のモデルだけで，ほかの分析は元の値を使う
+- 両版を1つに入れると因子の数が倍になり，同じ因子の両版の相関は1に近くなる。このため不適解(同じ因子の両版の相関が1を超える，潜在変数の共分散行列がわずかに正定値を割る)が出やすいが，版ごとの CFA と同じく不適解は基準を満たさないものとして数える
+- IDAS-II は18下位尺度をまとめたモデル(参考)と，上位区分ごとの3モデルの両方を当て，判断は上位区分ごとのモデルで行う
+- 計算は研究室サーバ(Al-khwa)で，IDAS-II とそれ以外の尺度に分けて並行して行った(最も時間のかかった IDAS-II で約1時間45分，メモリ最大約76GB)。ここでは保存した結果(`results/h2_invariance.rds`)を読み込むことで結果の報告とする。
+
+```{r}
+#| label: inv-compute
+#| eval: false
+# (計算のコード。重いのでレンダリングでは実行せず，結果を rds から読む)
+# 全尺度(IDAS-II は18下位尺度をまとめた全体モデル)
+inv_all <- tidyr::expand_grid(scale_id = sort(unique(key_h2$scale_id)), estimator = c("WLSMV", "MLR")) |>
+  purrr::pmap(\(scale_id, estimator) {
+    return(fit_invariance(citizen_long, key_h2, scale_id, estimator) |> dplyr::mutate(group = "all"))
+  }) |>
+  dplyr::bind_rows()
+
+# IDAS-II の上位区分ごと(区分名は英語の group_en で保存する。inv-judge の group_labels で日本語に直す)
+inv_idas_split <- tidyr::expand_grid(dplyr::distinct(idas_groups, group, group_en), estimator = c("WLSMV", "MLR")) |>
+  purrr::pmap(\(group, group_en, estimator) {
+    key_g <- key_h2 |>
+      dplyr::filter(scale_id == 1L, factor %in% idas_groups$factor[idas_groups$group == group])
+    return(fit_invariance(citizen_long, key_g, 1L, estimator) |> dplyr::mutate(group = group_en))
+  }) |>
+  dplyr::bind_rows()
+
+saveRDS(dplyr::bind_rows(inv_all, inv_idas_split), "results/h2_invariance.rds")
+```
+
+```{r}
+#| label: inv-judge
+#| eval: false
+# (このチャンクは冒頭の「結果の要約」で ref.label により実行済み。ここではコードを示すだけ)
+# 保存した結果を読み込む
+inv_raw <- readRDS("results/h2_invariance.rds")
+
+# 段と区分の表示名
+step_labels <- c(
+  configural = "配置不変",
+  thresholds = "閾値の等値", thresholds_loadings = "閾値＋負荷の等値",
+  loadings = "負荷の等値", loadings_intercepts = "負荷＋切片の等値"
+)
+group_labels <- c(
+  all = "全体", Distress = "心理的苦痛", `Obsessions/Fear` = "強迫/恐怖", `Positive Mood` = "ポジティブ気分"
+)
+
+# 判定(版ごとの CFA と同じ基準)
+inv_judged <- inv_raw |>
+  dplyr::left_join(key_h2 |> dplyr::distinct(scale_id, abbr), by = "scale_id") |>
+  dplyr::mutate(
+    chisq_df = chisq / df,
+    ok_index = dplyr::coalesce(chisq_df < 3 & cfi >= .95 & srmr <= .08, FALSE),
+    pass = ok_index & converged & improper_note == "",
+    step_label = step_labels[step],
+    group_label = group_labels[group],
+    # 段の番号(1 = 配置不変)
+    step_no = dplyr::row_number(),
+    .by = c(scale_id, group, estimator)
+  ) |>
+  add_labels()
+
+# 到達した水準: 配置不変から途切れずに基準を満たした最も上の段(配置不変で満たさなければ「なし」)
+inv_level <- inv_judged |>
+  dplyr::summarise(
+    n_pass_in_a_row = sum(cumprod(pass)),
+    reached = dplyr::if_else(n_pass_in_a_row == 0, "なし", step_label[pmax(n_pass_in_a_row, 1)]),
+    .by = c(scale_id, abbr, group, group_label, estimator)
+  )
+```
+
+```{r}
+#| label: tbl-inv-level
+#| tbl-cap: "測定不変性で到達した水準(WLSMV。IDAS-II の判断は上位区分ごとのモデルで行う)"
+# 到達した水準の表(推定法ごと)
+inv_level_table <- function(est) {
+  out <- inv_level |>
+    dplyr::filter(estimator == est) |>
+    dplyr::mutate(
+      scale_label = dplyr::if_else(group == "all", abbr, paste0(abbr, "(", group_label, ")")),
+      group = factor(group, levels = names(group_labels))
+    ) |>
+    dplyr::arrange(scale_id, group) |>
+    dplyr::select(scale_label, reached) |>
+    knitr::kable(col.names = c("尺度", "到達した水準"))
+  return(out)
+}
+inv_level_table("WLSMV")
+```
+
+```{r}
+#| label: inv-detail
+# 各段の詳細の表(推定法ごと)を作る関数
+inv_detail_table <- function(est) {
+  out <- inv_judged |>
+    dplyr::filter(estimator == est) |>
+    dplyr::mutate(
+      scale_label = dplyr::if_else(group == "all", abbr, paste0(abbr, "(", group_label, ")")),
+      group = factor(group, levels = names(group_labels)),
+      chisq_df = cell(chisq_df, ok_chisq_df),
+      cfi = cell(cfi, ok_cfi),
+      srmr = cell(srmr, ok_srmr, digits = 4),
+      # 丸めると -0.000 になるごく小さな負の値は 0.000 と出す
+      delta_cfi = dplyr::if_else(is.na(delta_cfi), "", sub("^-0\\.000$", "0.000", sprintf("%.3f", delta_cfi))),
+      delta_p = dplyr::if_else(is.na(delta_p), "", sprintf("%.3f", delta_p)),
+      # 収束しない・当てられない段は注に理由を書く
+      note_label = dplyr::case_when(
+        !converged & note != "" ~ note,
+        improper_note != "" ~ improper_note,
+        TRUE ~ ""
+      ),
+      # 表の幅を取らないよう，決まり文句を短くする(意味は表の見出しで説明する)
+      note_label = gsub("潜在変数の共分散行列が正定値でない\\(最小固有値 = ([-0-9.]+)\\)", "非正定値(\\1)", note_label),
+      pass_label = dplyr::if_else(pass, "満たす", "満たさない")
+    ) |>
+    dplyr::arrange(scale_id, group, step_no) |>
+    dplyr::mutate(
+      # 尺度名は各尺度の最初の段の行だけに出す(同じ名前が続くと区切りが見えないため)
+      scale_label = dplyr::if_else(step_no == 1, scale_label, ""),
+      # 段に番号を付ける(1 = 配置不変)
+      step_label = paste0(step_no, ". ", step_label)
+    ) |>
+    dplyr::select(scale_label, step_label, chisq_df, cfi, srmr, delta_cfi, delta_p, index_label, pass_label, note_label)
+  return(out)
+}
+inv_detail_cols <- c("尺度", "段", "χ²/df", "CFI", "SRMR", "ΔCFI", "差の検定 p", "満たさない指標", "基準", "不適解・注")
+```
+
+```{r}
+#| label: tbl-inv-wlsmv
+#| tbl-cap: "測定不変性の各段(WLSMV)。太字は基準を満たす値。「非正定値(x)」は潜在変数の共分散行列が正定値でないこと(x は最小固有値)"
+inv_detail_table("WLSMV") |>
+  knitr::kable(col.names = inv_detail_cols, align = c("l", "l", rep("r", 5), "l", "l", "l"))
+```
+
+
+```{r}
+#| label: tbl-inv-vs-cfa
+#| tbl-cap: "版ごとのCFAと測定不変性(配置不変の段)で判定が食い違う尺度(WLSMV)"
+# 版ごとの CFA で両版とも基準を満たしたか
+cfa_both <- cfa_judged |>
+  dplyr::summarise(cfa_both = all(pass), .by = c(scale_id, estimator))
+
+# 食い違いの表(推定法ごと)
+inv_vs_cfa_table <- function(est) {
+  out <- inv_judged |>
+    dplyr::filter(estimator == est, group == "all", step == "configural") |>
+    dplyr::left_join(cfa_both, by = c("scale_id", "estimator")) |>
+    dplyr::filter(pass != cfa_both | (ok_index & !pass)) |>
+    dplyr::mutate(
+      cfa_label = dplyr::if_else(cfa_both, "両版で満たす", "満たさない版がある"),
+      cfg_label = dplyr::case_when(
+        pass ~ "満たす",
+        ok_index ~ "適合度は満たすが不適解",
+        TRUE ~ "満たさない"
+      )
+    ) |>
+    dplyr::arrange(scale_id) |>
+    dplyr::select(abbr, cfa_label, cfg_label, improper_label) |>
+    knitr::kable(col.names = c("尺度", "版ごとのCFA", "配置不変の段", "不適解"))
+  return(out)
+}
+inv_vs_cfa_table("WLSMV")
+```
+
+
+### 探索的な分析 {#sec-parallel}
+
+項目から得られた相関行列に対して平行分析を適用する。
+順序尺度水準については，`psych`の`fa.parallel`で可能だが，この関数は反応段階数が8を超えるとポリコリック相関係数を計算せず，「ポリコリックは不要」としてエラーで止まる尺度がある。そこで，この制限のない`exametrika`パッケージのポリコリック相関係数を用いて平行分析を行い，因子数が一致するかどうかを確認する。
+
+`fa.parallel` は，実データと同じ人数・項目数の乱数データを繰り返し作り，その固有値の平均を基準線として因子数を決める。反復が少ないと基準線が乱数でぶれ，境目にある尺度では因子数が動くので，反復を1000回とした。
+
+また，`fa.parallel` は内部で並列計算(`parallel::mclapply`)を使うため，2コア以上で計算すると `set.seed()` で乱数の種を決めても結果が再現しない。反復100回のときに計算した環境によって6尺度の因子数が1つずつ違ったのも，このためであった。そこで1コアで計算し，同じ種で2回計算して結果が一致することを確かめた。
+
+さらに乱数の種を10通りに変えて計算し直したところ，判定が動いたのはポリコリック相関の因子分析版だけで，両版の因子数が一致した尺度の数は15〜17(10回中5回が16)であった。判定が割れたのは NARQ・BTPS・RMQ の3尺度で，ここで報告する種(20261003)の判定は21尺度すべてで10回の多数派と同じであった。ほかの3つの方式(ポリコリック相関の主成分版，ピアソン相関の因子分析版と主成分版)では，10回とも全尺度の因子数が同じであった(詳細は `R/h2_平行分析_種の安定性.md`)。
+
+計算に時間がかかるので，あらかじめ計算した結果(`results/h2_parallel.rds`)を読み込んで報告する。
+
+
+```{r}
+#| label: pa-compute
+#| eval: false
+# (計算のコード。乱数データの反復1000回で重いので，レンダリングでは実行せず結果を rds から読む)
+# 反復100回では境目の尺度の因子数が動いたので1000回にした
+# fa.parallel は内部で parallel::mclapply を使い，2コア以上では set.seed で結果が再現しないので1コアで計算する
+options(mc.cores = 1)
+set.seed(20261003)
+pa_raw <- tidyr::expand_grid(scale_id = sort(unique(key_h2$scale_id)), version = c("human", "ai")) |>
+  purrr::pmap(\(scale_id, version) parallel_one(citizen_long, scale_id, version, n_iter = 1000)) |>
+  dplyr::bind_rows()
+saveRDS(pa_raw, "results/h2_parallel.rds")
+```
+
+```{r}
+#| label: pa-judge
+#| eval: false
+# (このチャンクは冒頭の「結果の要約」で ref.label により実行済み。ここではコードを示すだけ)
+# 保存した結果を読み込む
+pa_raw <- readRDS("results/h2_parallel.rds")
+
+# 原論文の因子数(対応表の1次因子の数)
+n_factor_original <- key_h2 |>
+  dplyr::summarise(abbr = dplyr::first(abbr), n_factor_original = dplyr::n_distinct(factor), .by = scale_id)
+
+# 版を横に並べ，方式ごとに両版の因子数が一致するかを見る
+pa_wide <- pa_raw |>
+  dplyr::left_join(n_factor_original, by = "scale_id") |>
+  tidyr::pivot_wider(names_from = version, values_from = c(nfact_fa, ncomp_pc)) |>
+  dplyr::mutate(
+    same_fa = dplyr::if_else(nfact_fa_human == nfact_fa_ai, "一致", "不一致"),
+    same_pc = dplyr::if_else(ncomp_pc_human == ncomp_pc_ai, "一致", "不一致")
+  ) |>
+  dplyr::arrange(cor_type, scale_id)
+
+pa_cols <- c("abbr", "n_item", "n_factor_original",
+             "nfact_fa_human", "nfact_fa_ai", "same_fa",
+             "ncomp_pc_human", "ncomp_pc_ai", "same_pc")
+pa_colnames <- c("尺度", "項目数", "原論文の因子数",
+                 "因子分析版 人手版", "因子分析版 AI版", "因子分析版 両版",
+                 "主成分版 人手版", "主成分版 AI版", "主成分版 両版")
+```
+
+```{r}
+#| label: tbl-pa-poly
+#| tbl-cap: "平行分析が示す因子数(ポリコリック相関)"
+pa_wide |>
+  dplyr::filter(cor_type == "polychoric") |>
+  dplyr::select(dplyr::all_of(pa_cols)) |>
+  knitr::kable(col.names = pa_colnames)
+```
+
+```{r}
+#| label: tbl-pa-pearson
+#| tbl-cap: "平行分析が示す因子数(ピアソン相関)"
+pa_wide |>
+  dplyr::filter(cor_type == "pearson") |>
+  dplyr::select(dplyr::all_of(pa_cols)) |>
+  knitr::kable(col.names = pa_colnames)
+```
+
+```{r}
+#| label: tbl-pa-count
+#| tbl-cap: "両版で因子数が一致した尺度の数(21尺度中)。ポリコリック相関の因子分析版は，乱数の種を変えると15〜17"
+pa_wide |>
+  dplyr::summarise(
+    fa = sum(same_fa == "一致"),
+    pc = sum(same_pc == "一致"),
+    .by = cor_type
+  ) |>
+  dplyr::mutate(cor_type = dplyr::if_else(cor_type == "polychoric", "ポリコリック", "ピアソン")) |>
+  knitr::kable(col.names = c("相関", "因子分析版", "主成分版"))
+```
+
+## 仮説2-2: 得点の比較 {#sec-compare}
+
+最後に，尺度の実用的特徴として，両版の差異を検証する。
+
+- 得点はすべて項目の平均とする。対象尺度 xlsx には和や POMP で得点化する尺度(rAOT-E は (観測値 − 最小値)/(最大値 − 最小値) で採点する POMP 得点)もあるが，対応のある t 検定の BF とピアソンの相関は得点の線形変換で変わらないので，平均にそろえた
+- 1次因子の得点に加え，原論文が定義している総合得点も比べる
+  + 全項目の平均を計算するもの: IDAS-II・MCS・MEMI・PSTI
+  + 上位因子を計算するもの: NARQ(称賛・対抗)・BTPS(Rigid・Self-critical・Narcissistic)
+  + TCI: Other-benefiting の平均 − Self-defeating の平均(原論文の総合得点)
+  + GAAIS-10 は原論文が総合得点を作らないので作らない
+- 平均の差: 対応のある t 検定をベイズファクターで行う(`BayesFactor::ttestBF`，Cauchy 事前分布，scale = √2/2)。BF01 > 3 なら「平均に差がないモデルが支持される」とする(IPA)。BF01 < 1/3(BF10 > 3 と同じ)なら「差があるモデルが支持される」，その間は「決着せず」(BF の大きさが十分でない)として3つに分けて示す
+- 一致: 人手版と AI 版の得点のピアソンの相関係数。r ≥ .80 なら「両版の得点が個人レベルで高い一致を示す」とする(IPA準拠)
+- 参加者内では差得点の SD が $SD \times \sqrt{2(1 - r)}$ に縮むので，相関が高い得点では，全員がほぼ同じ向きにわずかにずれるだけでも「差あり」が強く支持される。IPA も述べているとおり，平均がずれていても相関が高ければ，個人の相対的な順位は保たれている。
+
+```{r}
+#| label: score-compute
+#| eval: false
+# (このチャンクは冒頭の「結果の要約」で ref.label により実行済み。ここではコードを示すだけ)
+# 得点(すべて項目の平均)
+scores_factor <- score_factors(citizen_long, key_h2, "factor")
+scores_upper <- score_factors(citizen_long, dplyr::filter(key_h2, scale_id %in% c(3L, 5L)), "upper")
+scores_total <- score_factors(citizen_long, dplyr::filter(key_h2, scale_id %in% c(1L, 10L, 18L, 19L)), "total")
+
+# TCI の総合得点 = Other-benefiting の平均 - Self-defeating の平均
+scores_tci <- score_factors(citizen_long, dplyr::filter(key_h2, scale_id == 13L), "upper") |>
+  dplyr::select(subject_id, scale_id, abbr, version, score_name, score) |>
+  tidyr::pivot_wider(names_from = score_name, values_from = score) |>
+  dplyr::transmute(
+    subject_id, scale_id, abbr,
+    level = "total", score_name = "total (Other - Self)", version,
+    n_item = NA_integer_,
+    score = `Other-benefiting` - `Self-defeating`
+  )
+
+scores_h2 <- dplyr::bind_rows(scores_factor, scores_upper, scores_total, scores_tci)
+
+# 版間の比較(BF と相関)
+compare_h2 <- compare_versions(scores_h2) |>
+  dplyr::mutate(
+    # 判定
+    null_supported = bf01 > 3,
+    bf_result = dplyr::case_when(
+      bf01 > 3 ~ "差なしを支持",
+      bf01 < 1 / 3 ~ "差ありを支持",
+      TRUE ~ "決着せず"
+    ) |>
+      factor(levels = c("差なしを支持", "決着せず", "差ありを支持")),
+    high_agreement = r >= .80,
+    level = factor(level, levels = c("factor", "upper", "total"), labels = c("因子", "上位因子", "総合"))
+  ) |>
+  dplyr::arrange(scale_id, level, score_name)
+```
+
+```{r}
+#| label: tbl-compare
+#| tbl-cap: "人手版と AI 版の得点の比較。差は AI 版 − 人手版。太字は BF01 > 3 と r ≥ .80"
+# BF の表示(小さい値は < 0.01 とする)
+fmt_bf <- function(x) dplyr::if_else(x < .01, "< 0.01", sprintf("%.2f", x))
+
+compare_h2 |>
+  dplyr::mutate(
+    mean_human = sprintf("%.2f", mean_human),
+    mean_ai = sprintf("%.2f", mean_ai),
+    diff = sprintf("%.2f", diff),
+    d_z = sprintf("%.2f", d_z),
+    bf01_cell = dplyr::if_else(null_supported, paste0("**", fmt_bf(bf01), "**"), fmt_bf(bf01)),
+    r_cell = dplyr::if_else(
+      high_agreement,
+      sprintf("**%.2f** [%.2f, %.2f]", r, r_lower, r_upper),
+      sprintf("%.2f [%.2f, %.2f]", r, r_lower, r_upper)
+    )
+  ) |>
+  dplyr::select(abbr, level, score_name, n, mean_human, mean_ai, diff, d_z, bf01_cell, bf_result, r_cell) |>
+  knitr::kable(
+    col.names = c("尺度", "水準", "得点", "n", "人手版 平均", "AI版 平均", "差", "d_z", "BF01", "BF の判定", "r [95%CI]"),
+    align = c("l", "l", "l", rep("r", 6), "l", "r")
+  )
+```
+
+```{r}
+#| label: tbl-compare-count
+#| tbl-cap: "得点の比較の集計(得点の数)"
+compare_h2 |>
+  dplyr::mutate(agreement = dplyr::if_else(high_agreement, "r ≥ .80", "r < .80")) |>
+  dplyr::count(level, bf_result, agreement) |>
+  tidyr::pivot_wider(names_from = agreement, values_from = n, values_fill = 0) |>
+  dplyr::select(level, bf_result, `r ≥ .80`, `r < .80`) |>
+  knitr::kable(col.names = c("水準", "BF の判定", "r ≥ .80", "r < .80"))
+```
+
+### 記述統計(補足資料)
+
+IPA にある通り，各得点の分布の記述統計(平均値，標準偏差，中央値，四分位範囲，最小値，最大値，歪度，尖度)を補足資料として示す。
+
+```{r}
+#| label: tbl-desc
+#| tbl-cap: "得点の記述統計(歪度・尖度は psych の既定 type = 3)"
+describe_scores(scores_h2) |>
+  dplyr::mutate(
+    version_label = dplyr::if_else(version == "human", "人手版", "AI版"),
+    level = factor(level, levels = c("factor", "upper", "total"), labels = c("因子", "上位因子", "総合")),
+    version = factor(version, levels = c("human", "ai"))
+  ) |>
+  dplyr::arrange(scale_id, level, score_name, version) |>
+  dplyr::select(abbr, level, score_name, version_label, n, mean, sd, median, iqr, min, max, skew, kurtosis) |>
+  knitr::kable(
+    col.names = c("尺度", "水準", "得点", "版", "n", "平均", "SD", "中央値", "IQR", "最小", "最大", "歪度", "尖度"),
+    digits = 2
+  )
+```
+
+## MLR でやってみた場合
+
+<!-- ここに文章 -->
+
+- 項目を連続変数として扱い，MLR(推定値は最尤法と同じで，標準誤差と $\chi^2$ 値を補正する)で同じ分析を行った結果を，感度分析としてまとめて示す
+- 基準・不適解の扱い・判定のしかたは WLSMV と同じ。測定不変性の段は 配置不変 → 負荷の等値 → 負荷＋切片の等値 とする
+- 選択肢の併合は WLSMV のモデルだけで行い，MLR では元の値を使う
+
+### 版ごとのCFA(MLR)
+
+```{r}
+#| label: tbl-mlr-cfa
+#| tbl-cap: "版ごとのCFA(MLR)。太字は基準を満たす値"
+cfa_table("MLR")
+```
+
+```{r}
+#| label: tbl-mlr-cfa-count
+#| tbl-cap: "版ごとのCFAの判定の集計(MLR)"
+cfa_count_table("MLR")
+```
+
+```{r}
+#| label: tbl-mlr-improper
+#| tbl-cap: "不適解の一覧(MLR。基準を満たさないものとして数えた)"
+improper_table("MLR")
+```
+
+```{r}
+#| label: tbl-mlr-highcor
+#| tbl-cap: "不適解ではないが因子間相関が .99 を超えるもの(MLR。判定は変えない)"
+highcor_table("MLR")
+```
+
+```{r}
+#| label: tbl-mlr-idas-split
+#| tbl-cap: "IDAS-II の上位区分ごとのCFA(MLR)。太字は基準を満たす値"
+idas_split_table("MLR")
+```
+
+### 測定不変性(MLR)
+
+```{r}
+#| label: tbl-mlr-inv-level
+#| tbl-cap: "測定不変性で到達した水準(MLR)"
+inv_level_table("MLR")
+```
+
+```{r}
+#| label: tbl-mlr-inv-detail
+#| tbl-cap: "測定不変性の各段(MLR)。太字は基準を満たす値。「非正定値(x)」は潜在変数の共分散行列が正定値でないこと(x は最小固有値)"
+inv_detail_table("MLR") |>
+  knitr::kable(col.names = inv_detail_cols, align = c("l", "l", rep("r", 5), "l", "l", "l"))
+```
+
+```{r}
+#| label: tbl-mlr-inv-vs-cfa
+#| tbl-cap: "版ごとのCFAと測定不変性(配置不変の段)で判定が食い違う尺度(MLR)"
+inv_vs_cfa_table("MLR")
+```
+
+### WLSMV と MLR の結果の違い
+
+```{r}
+#| label: est-diff-compute
+# 版ごとの CFA: 基準を満たした版の数(0〜2)と判定
+cfa_rank <- cfa_wide |>
+  dplyr::mutate(n_pass = pass_human + pass_ai) |>
+  dplyr::select(scale_id, abbr, estimator, result, n_pass) |>
+  tidyr::pivot_wider(names_from = estimator, values_from = c(result, n_pass))
+
+# 測定不変性: 到達した段の番号(0 = なし)と表示名。IDAS-II は上位区分ごとのモデルを使い，3区分のうち最も低い段とする
+inv_rank <- inv_level |>
+  dplyr::filter((scale_id == 1L & group != "all") | (scale_id != 1L & group == "all")) |>
+  dplyr::summarise(n_step = min(n_pass_in_a_row), .by = c(scale_id, estimator)) |>
+  dplyr::left_join(
+    inv_level |> dplyr::distinct(estimator, n_pass_in_a_row, reached),
+    by = c("estimator", "n_step" = "n_pass_in_a_row")
+  ) |>
+  dplyr::select(scale_id, estimator, n_step, reached) |>
+  tidyr::pivot_wider(names_from = estimator, values_from = c(n_step, reached))
+
+# 良くなったか悪くなったか(MLR を WLSMV と比べて)
+change <- function(wlsmv, mlr) {
+  out <- dplyr::case_when(
+    mlr > wlsmv ~ "MLR で良くなる",
+    mlr < wlsmv ~ "MLR で悪くなる",
+    TRUE ~ ""
+  )
+  return(out)
+}
+
+est_diff <- cfa_rank |>
+  dplyr::left_join(inv_rank, by = "scale_id") |>
+  dplyr::mutate(
+    cfa_change = change(n_pass_WLSMV, n_pass_MLR),
+    inv_change = change(n_step_WLSMV, n_step_MLR)
+  ) |>
+  dplyr::arrange(scale_id)
+```
+
+```{r}
+#| label: tbl-est-diff
+#| tbl-cap: "WLSMV と MLR の結果の違い(違いのある尺度のみ)。測定不変性は到達した段(IDAS-II は上位区分のうち最も低いもの)"
+est_diff |>
+  dplyr::filter(cfa_change != "" | inv_change != "") |>
+  dplyr::select(abbr, result_WLSMV, result_MLR, cfa_change, reached_WLSMV, reached_MLR, inv_change) |>
+  knitr::kable(col.names = c("尺度", "CFA WLSMV", "CFA MLR", "CFA の違い", "不変性 WLSMV", "不変性 MLR", "不変性の違い"))
+```
+
+```{r}
+#| label: tbl-est-diff-count
+#| tbl-cap: "WLSMV と比べた MLR の結果(尺度の数)"
+tibble::tibble(
+  観点 = c("版ごとの CFA", "測定不変性"),
+  `MLR で良くなる` = c(sum(est_diff$cfa_change == "MLR で良くなる"), sum(est_diff$inv_change == "MLR で良くなる")),
+  `変わらない` = c(sum(est_diff$cfa_change == ""), sum(est_diff$inv_change == "")),
+  `MLR で悪くなる` = c(sum(est_diff$cfa_change == "MLR で悪くなる"), sum(est_diff$inv_change == "MLR で悪くなる"))
+) |>
+  knitr::kable()
+```

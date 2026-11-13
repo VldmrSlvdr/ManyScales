@@ -1,0 +1,116 @@
+cff-version: 1.2.0
+message: Please cite the ManyScales preprint when using these materials.
+type: software
+title: 'ManyScales: translation workflows and study analyses'
+authors:
+- family-names: Li
+  given-names: Yi-Fei
+- family-names: 国里
+  given-names: 愛彦
+- family-names: 小杉
+  given-names: 考司
+repository-code: https://github.com/VldmrSlvdr/ManyScales
+license: MIT
+date-released: '2026-11-13'
+preferred-citation:
+  type: article
+  title: '大規模言語モデルの翻訳を評価する大規模共同研究: 22心理尺度の人手-機械翻訳間の比較'
+  authors:
+  - family-names: 山田
+    given-names: 祐樹
+  - family-names: 小杉
+    given-names: 考司
+  - family-names: 国里
+    given-names: 愛彦
+  - family-names: 分寺
+    given-names: 杏介
+  - family-names: 後藤
+    given-names: 崇志
+  - family-names: 橋本
+    given-names: 泰央
+  - family-names: 工藤
+    given-names: 大介
+  - family-names: 李
+    given-names: 禕飛
+  - family-names: 眞嶋
+    given-names: 良全
+  - family-names: 向井
+    given-names: 智哉
+  - family-names: 野村
+    given-names: 竜也
+  - family-names: 小口
+    given-names: 真奈
+  - family-names: 七條
+    given-names: 花恋
+  - family-names: 下司
+    given-names: 忠大
+  - family-names: 高松
+    given-names: 礼奈
+  - family-names: 竹橋
+    given-names: 洋毅
+  - family-names: 竹下
+    given-names: 昌志
+  - family-names: 浅野
+    given-names: 良輔
+  - family-names: 福田
+    given-names: 実奈
+  - family-names: 古谷
+    given-names: 嘉一郎
+  - family-names: 日道
+    given-names: 俊之
+  - family-names: 平野
+    given-names: 寛樹
+  - family-names: 五十嵐
+    given-names: 祐
+  - family-names: 伊藤
+    given-names: 雅隆
+  - family-names: 香川
+    given-names: 璃奈
+  - family-names: 神野
+    given-names: 雄
+  - family-names: 加藤
+    given-names: 弘通
+  - family-names: 古村
+    given-names: 健太郎
+  - family-names: 宮川
+    given-names: 裕基
+  - family-names: 水野
+    given-names: 君平
+  - family-names: 村浦
+    given-names: 新之助
+  - family-names: 新谷
+    given-names: 優
+  - family-names: 西村
+    given-names: 多久磨
+  - family-names: 尾崎
+    given-names: 由佳
+  - family-names: 佐藤
+    given-names: 秀樹
+  - family-names: 佐藤
+    given-names: 奈月
+  - family-names: 嶋
+    given-names: 大樹
+  - family-names: 瀧川
+    given-names: 諒子
+  - family-names: 田中
+    given-names: 勝則
+  - family-names: 塚本
+    given-names: 早織
+  - family-names: 山崎
+    given-names: 茜
+  - family-names: 楊
+    given-names: 帆
+  - family-names: 三浦
+    given-names: 麻子
+  doi: 10.51094/jxiv.2056
+  url: https://jxiv.jst.go.jp/index.php/jxiv/preprint/view/2056
+  journal: Jxiv
+  year: 2026
+  date-published: '2026-06-04'
+  version: '3'
+references:
+- type: generic
+  title: LLMTranslate-Psych-Japan
+  url: https://osf.io/hn4fr/
+  publisher:
+    name: Open Science Framework

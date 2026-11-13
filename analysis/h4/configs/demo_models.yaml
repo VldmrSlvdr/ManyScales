@@ -1,0 +1,13 @@
+# Local stand-in used by configs/demo.yaml. This file is not a
+# measurement instrument for the preregistered analysis.
+models:
+  primary:
+    name: deterministic-hash
+    short_name: hash
+    family: deterministic
+    role: confirmatory
+    normalize: true
+    expected_dimension: 32
+    dimension: 32
+
+  robustness: []

@@ -1,0 +1,913 @@
+---
+title: "仮説１"
+date: today
+date-format: "YYYY-MM-DD"
+format:
+  html:
+    toc: true
+    toc-depth: 4
+    toc-location: left
+    number-sections: true
+    embed-resources: true
+    code-fold: show
+---
+
+## 目的
+
+仮説 1 LLM 翻訳版と人手翻訳版に対して，心理尺度を研究で用いる心理学の専門家が，意味的忠
+実性，表現の自然さ，文化的妥当性に関する評価を行う。人手翻訳版の方が，LLM 翻訳版よりも，
+意味的忠実性，文化的妥当性に関して有意に評価が高くなることが予想される。表現の自然さにつ
+いては，人手翻訳版と LLM 翻訳版との間に差は無いと予想される。
+
+## 結果の要約 {#sec-summary}
+
+```{r}
+#| label: summary-compute
+#| echo: false
+#| message: false
+#| warning: false
+#| results: hide
+#| ref.label: [h1-setup, h1-data, h1-fit, h1-results, h1-bf-sd, h1-bf-sens, h1-bridge, h1-verdict, h1-fig-data]
+```
+
+### 判定表
+
+判定の規則は @sec-rules のとおりである。β は「人手版 − AI版」の平均翻訳効果（対数オッズ）で，正なら人手版の方が高い評定を得やすい。
+
+```{r}
+#| label: tbl-verdict
+#| tbl-cap: "仮説1の判定。β と評定点差は事後平均［95%信用区間］。BF は Savage–Dickey 法（β の事前分布は事前登録の Cauchy(0, √2/2) を対数オッズの単位に直した Cauchy(0, 1.28)）。"
+#| echo: false
+h1_verdict_tab |>
+  transmute(
+    観点 = h1_aspect_labels[aspect],
+    予測 = prediction,
+    `β［95%CrI］` = beta,
+    `Pr(人手版が高い)` = pr_human_better,
+    `信用区間による判定` = ci_verdict,
+    `ベイズファクター` = bayes_factor,
+    `BFによる判定` = bf_verdict,
+    `事前分布の感度` = prior_robust,
+    `BF計算の確認` = bridge_check,
+    `今回の21尺度の評定点差` = points
+  ) |>
+  knitr::kable()
+```
+
+### 結論の図
+
+```{r}
+#| label: fig-summary-evidence
+#| echo: false
+#| fig-width: 9
+#| fig-height: 4
+#| fig-cap: "仮説の予測に対するベイズファクター。右（>3）ほど予測を支持し，左（<1/3）ほど予測に反する。意味的忠実性・文化的妥当性は「人手版が高い」と「平均差0」の比較（BF+0），表現の自然さは「平均差0」と「平均差あり」の比較（BF01）。大きい点が主解析（Cauchy の尺度 r = √2/2），小さい点は r を 1/2・1 に変えた場合。"
+fig_h1_evidence
+```
+
+```{r}
+#| label: fig-summary-beta
+#| echo: false
+#| fig-width: 9
+#| fig-height: 5
+#| fig-cap: "平均翻訳効果 β（人手版 − AI版，対数オッズ）の事後分布。濃い部分が95%信用区間。破線（0）より右なら人手版，左ならAI版の方が高い評定を得やすい。"
+fig_h1_beta
+```
+
+```{r}
+#| label: fig-summary-points
+#| echo: false
+#| fig-width: 8
+#| fig-height: 2.8
+#| fig-cap: "今回評価した専門家と21尺度における予測評定の差（人手版 − AI版，1〜5点）。点は事後平均，線は95%信用区間。"
+fig_h1_points
+```
+
+### 結論
+
+```{r}
+#| label: summary-text
+#| echo: false
+v <- split(h1_verdict_tab, h1_verdict_tab$aspect)
+```
+
+- **意味的忠実性**（予測：人手版 > AI版）：β の95%信用区間による判定は「`r v$semantic$ci_verdict`」。片側のベイズファクターは `r v$semantic$bayes_factor` で，「`r v$semantic$bf_verdict`」（`r v$semantic$prior_robust`）。
+- **文化的妥当性**（予測：人手版 > AI版）：β の95%信用区間による判定は「`r v$cultural_validity$ci_verdict`」。片側のベイズファクターは `r v$cultural_validity$bayes_factor` で，「`r v$cultural_validity$bf_verdict`」（`r v$cultural_validity$prior_robust`）。
+- **表現の自然さ**（予測：差なし）：`r v$naturalness$bayes_factor` で，「`r v$naturalness$bf_verdict`」（`r v$naturalness$prior_robust`）。ただし，今回の21尺度の平均でみた評定点差は `r v$naturalness$points` 点である。
+
+読むときの注意：
+
+- 「平均差0」は**尺度母集団の平均**翻訳効果が0という意味で，尺度別・専門家別の差は H0 でも認めている。「どの尺度でも両版が同じ」という意味ではない（尺度別の結果は @sec-scale）。
+- BF01 = 10 は「データの得られやすさが平均差0モデルのもとで10倍高い」という意味で，「差がない確率が10倍」でも「同等性が証明された」でもない。
+- 母集団平均の β と，今回の21尺度の評定点差は対象も単位も違う。前者で「平均差0」が支持されても，後者で小さな差が推定されることはありうる（@sec-estimands）。
+- 「BF計算の確認」が「一致」でない場合は，BF の数値を結論に使う前に @sec-bridge を確認する。
+
+## 判定の規則 {#sec-rules}
+
+結果を見る前に，次の規則を決めておく。β は尺度母集団における平均翻訳効果（人手版 − AI版，対数オッズ）である。
+
+**意味的忠実性・文化的妥当性（予測：人手版 > AI版）**
+
+事前登録（Stage 1 IPA）に従い，β の95%信用区間（CrI）で判定する。
+
+| 95%CrI | 判定 |
+|---|---|
+| 下限 > 0 | 予測を支持（人手版の方が高い） |
+| 上限 < 0 | 予測と逆（AI版の方が高い） |
+| 0 を含む | 予測は支持されない |
+
+「支持されない」には「差がないことが示された」場合と「データが足りずどちらとも言えない」場合が混ざる。そこで，予測の方向に合わせた片側の BF+0（「人手版が高い」モデル vs 「平均差0」モデル）で証拠の強さを補足する。BF+0 ≤ 1/3 なら「人手版優位」より「平均差0」の方がデータをよく説明する，つまり**予測に反する証拠**がある。
+
+**表現の自然さ（予測：差なし）**
+
+「平均差0」モデルと「平均差あり」モデルを BF01 で比較する。
+
+| BF01（平均差0の支持） | 判定 |
+|---|---|
+| ≥ 10 | 平均差0を強く支持 |
+| 3 〜 10 | 平均差0を支持 |
+| 1/3 〜 3 | 判断保留（どちらのモデルを支持する証拠も十分でない） |
+| 1/10 〜 1/3 | 平均差ありを支持 |
+| < 1/10 | 平均差ありを強く支持 |
+
+片側の BF+0 もこの表の BF01 を 1/BF+0 に置き換えて同じ言葉で表す（例：BF+0 = 0.2 なら BF0+ = 5 で「平均差0を支持」）。
+
+**BF の確かさ**
+
+- β の事前分布 Cauchy の尺度 r（δ の単位）を 1/2・√2/2・1 に変えても，BF が同じ区分（3以上／1/3〜3／1/3以下）に入る場合に「事前分布に頑健」とする。区分が変わる場合は，すべての値を報告し，強い結論は述べない。
+- 事後サンプルを増やしたブリッジサンプリングの BF10（5回の中央値）と Savage–Dickey 法の BF10 が**同じ判定の言葉に入り，かつ3倍以内**で一致した場合に「一致」とする。一致しない場合は，両方を報告して BF による判定を保留する。
+
+## 解析方法
+
+### モデル
+
+同じ専門家が複数の尺度について人手版とAI版の両方を評価している。評定は1〜5の5件法なので，観点ごとに**ベイジアン順序ロジットモデル**（brms，`cumulative("logit")`）を当てはめる。
+
+```r
+rating ~ x + (1 + x || subject_id) + (1 + x || scale_id) + (1 | pair_id)
+# x: 人手版 = +0.5，AI版 = −0.5
+```
+
+| モデルの項 | 意味 |
+|---|---|
+| `x`（β） | 専門家や尺度による違いを考慮した，全体としての人手版とAI版の差。**仮説の判定に使う** |
+| `(1 + x \|\| subject_id)` | 専門家による違い（評定の厳しさ，人手版をどれだけ高く評価しやすいか） |
+| `(1 + x \|\| scale_id)` | 尺度による違い（評価されやすさ，人手版とAI版の差の大きさ） |
+| `(1 \| pair_id)` | 専門家×尺度の組合せによる違い（両版に共通） |
+
+- `||` は変量切片と変量傾きの相関を0と置く指定である。
+- β は**評定点の差ではなく**，より高い評定を得るオッズの対数の差である（β = 0.4 ならオッズ比 exp(0.4) ≈ 1.5）。評定点での差は予測確率から別に求める（@sec-estimands）。
+- 「1|2以上」「2以下|3以上」…のどこで区切っても効果は同じと仮定し（比例オッズ），4つの閾値は全尺度に共通とする。
+
+事前分布は β ~ Cauchy(0, 1.28)（事前登録の Cauchy(0, √2/2) を対数オッズの単位に直したもの，@sec-bf-method），閾値 ~ Normal(0, 2.5)，変量効果の SD ~ 半正規(0, 1) である。推定は4チェーン × 4000回（うち2000回はウォームアップ），`adapt_delta = 0.99`，`max_treedepth = 15` である。計算には cmdstanr バックエンドを用い，各チェーンの中を `brms::threading()` で並列化する（1チェーンあたりのスレッド数は物理コア数 ÷ 4）。
+
+### 2種類の「差」 {#sec-estimands}
+
+| 名前 | 何の差か | 何に使うか |
+|---|---|---|
+| **平均翻訳効果 β**（`population_log_odds`） | 尺度母集団（今回の21尺度を交換可能な標本とみなしたモデル上の母集団）における平均の対数オッズ差 | 仮説の判定（95%CrI と BF） |
+| **今回の21尺度の評定点差**（`equal_scale_average_points`） | 実際に評価した専門家と21尺度について，両版の予測評定（1〜5点）の差を尺度内で平均し，21尺度を等しい重みで平均したもの | 差の大きさの解釈 |
+| 尺度別の効果（`scale_log_odds`, `scale_points`） | 部分プーリング後の尺度ごとの差 | 探索的な解釈（多重比較の問題は残る） |
+
+β は「新しい尺度でも平均すれば差があるか」，評定点差は「今回の尺度・専門家では平均何点違ったか」に答える。後者は尺度間のばらつきを母集団への一般化の不確かさとして含まないので，信用区間が狭くなる。
+
+### ベイズファクターの計算 {#sec-bf-method}
+
+**比較する2つのモデル**
+
+- **H0**：β = 0（尺度母集団の平均翻訳効果が0）
+- **H1**：β ~ Cauchy(0, 1.28)（平均翻訳効果は0とは限らない）
+
+**β の事前分布**
+
+事前登録では，BF の事前分布を Cauchy(0, √2/2) としている。この尺度 r = √2/2 は，ベイズ t 検定（JZS 事前分布）と同じく**標準化効果量 δ の単位**で決められている。一方，本モデルの β は対数オッズの差なので，単位をそろえる必要がある。順序ロジットモデルは，評定の背後に誤差がロジスティック分布に従う潜在変数を考えるモデルであり，その誤差の SD は π/√3 ≈ 1.81 である。そこで β をこの SD で割ったものを δ とみなし，
+
+$$
+\delta = \frac{\beta}{\pi/\sqrt{3}} \sim \text{Cauchy}\!\left(0,\ \tfrac{\sqrt{2}}{2}\right)
+\quad\Longleftrightarrow\quad
+\beta \sim \text{Cauchy}\!\left(0,\ \tfrac{\sqrt{2}}{2} \times \tfrac{\pi}{\sqrt{3}} \approx 1.28\right)
+$$
+
+とする。この標準化には誤差の SD だけを使い，専門家・尺度・ペアの変量効果の分散は含めていない（変量効果の分散も含めて標準化すると δ は小さくなる）。以下，Cauchy の尺度は δ の単位の r で表す。
+
+どちらのモデルにも専門家別・尺度別の翻訳効果のばらつき（変量傾き）を入れている。したがって H0 は「すべての尺度で差がない」ではない。また，潜在尺度上の平均0は，事前登録にある「評定点の母平均差0」と厳密には同じではない。
+
+**Savage–Dickey 法（主に報告する BF）**
+
+H0 は H1 の β を0に固定したものであり，β 以外のパラメータの事前分布は両モデルで同じで，β の事前分布とも独立である。このとき
+
+$$
+\text{BF}_{01} = \frac{p(\beta = 0 \mid \text{データ}, H_1)}{p(\beta = 0 \mid H_1)}
+$$
+
+が成り立つ（Savage–Dickey 密度比）。分母は Cauchy(0, 1.28) の0での密度（1 / (1.28π) ≈ 0.248），分子は主解析の β の事後サンプルから求めた0での密度（カーネル密度推定）である。シミュレーションでは，事後サンプル8000個で推定誤差は数%程度だった。安定性はチェーンごとの値・正規近似と照合して確かめる。`brms::hypothesis(fit, "x = 0")` は事前分布の0での密度も事前サンプルから推定するが，Cauchy 分布は裾が重く，その推定が不安定になるので用いない（分母は解析的に求まる）。
+
+BF を周辺尤度から直接求めるブリッジサンプリング（`brms::bayes_factor()`）ではなく Savage–Dickey 法を主に用いるのは，次の理由による。
+
+- 本モデルのパラメータは約1300個（大部分が変量効果）あり，ブリッジサンプリングはこの次元の積分を推定する。brms の文書は，この方法には通常の推定より多くの事後サンプルが必要であり，複数回計算して安定性を確かめるよう勧めている。MCMC の収束が良好でも，BF の推定が安定しているとは限らない。
+- Savage–Dickey 法は β の1次元の密度を推定するだけで，主解析の事後サンプルをそのまま使える。
+- 両者は理論上同じ値になるので，ブリッジサンプリングは計算の確認に用いる（後述）。
+
+**片側の BF（方向の予測用）**
+
+人手版が高い（β > 0）という予測には，β の事前分布を正の側に限ったモデル H+（半 Cauchy 分布）と H0 を比べる。
+
+$$
+\text{BF}_{+0} = \text{BF}_{10} \times \frac{\Pr(\beta > 0 \mid \text{データ}, H_1)}{\Pr(\beta > 0 \mid H_1)} = \text{BF}_{10} \times 2\Pr(\beta > 0 \mid \text{データ}, H_1)
+$$
+
+β がAI版の方向に推定されると BF+0 は BF10 より小さくなる。両側の BF10 が大きくても，それは「人手版の優位」を支持するとは限らない。
+
+**事前分布の感度分析**
+
+H1 の β の事前分布だけを尺度 r の Cauchy 分布に変えたときの BF は，主解析の事後サンプルの重みづけで厳密に求められる（H0 は β を含まないので変わらない）。
+
+$$
+\text{BF}_{10}(r) = \text{BF}_{10}\!\left(\tfrac{\sqrt{2}}{2}\right) \times E_{\text{事後}}\!\left[\frac{\text{Cauchy}(\beta;\,0,\,r\pi/\sqrt{3})}{\text{Cauchy}(\beta;\,0,\,\tfrac{\sqrt{2}}{2}\pi/\sqrt{3})}\right]
+$$
+
+r = 0.1〜1.5 の BF を曲線で示す。頑健性の判断には r = 1/2（狭い）・√2/2（事前登録）・1（広い）を用い，r = 1/2・1 は実際に再推定して確かめる（`run_prior_refit`）。
+
+**ブリッジサンプリングによる確認**
+
+H1・H0 を事後サンプル40,000個（4チェーン × 10,000回）で別々に推定し，`bridge_sampler()` を乱数シードを変えて5回実行する（`run_bridge_check`）。シードごとの BF10 のばらつきと，同じ事後サンプルから求めた Savage–Dickey 法の BF10 とを比べる。参考として，主解析と同じ事後サンプル数（8000個）で1回だけ計算した値も示す。これらのモデルも，主解析と同じく cmdstanr バックエンドで推定し，チェーン内を並列化する。
+
+### 評価項目と得点の方向
+
+| 観点（変数名） | 評価項目 | 処理済みデータの評定値 | 解析用得点 |
+|---|---|---|---|
+| 意味的忠実性（`semantic`） | 英語原文の項目の意味や意図を忠実に反映しており，誤解や欠落，過度な装飾などがない | 高いほど良い | そのまま |
+| 表現の自然さ（`naturalness`） | 専門用語や曖昧な表現が含まれておらず，明瞭・簡潔で理解しやすい | 高いほど良い | そのまま |
+| 文化的妥当性（`cultural_validity`） | 日本で生活する人にとって馴染みのない慣用句や比喩，例示などが使われている | 高いほど良い（逆転済み） | そのまま |
+
+文化的妥当性の設問は「馴染みのない表現が使われている」という逆転項目だが，処理済みデータ（`data/3_data_processed/`）の段階で既に逆転されており，値が高いほど馴染みのない表現が少ない（文化的妥当性が高い）。そのため，ここではさらに逆転せずにそのまま用いる。3観点とも**解析用得点が高いほど好評価**で，β が正なら人手版優位となる。
+
+### 欠測と提示順
+
+- 主解析では観測された評定をすべて使う。人手版にのみ欠測がある（各観点6件）ため，両版がそろったペアだけで再推定して比べる（`complete_pairs = TRUE`）。
+- 提示順は `trans_cond`（先に評価した版）から取る。感度分析では，評価時期（先 = −0.5／後 = +0.5，`period_c`）と提示順（人手版が先 = +0.5，`human_first_c`）を加えて β が変わるかを確かめる。持越し効果を独立に推定できるとは仮定しない。
+
+## 解析の実行
+
+### 準備
+
+`run_*` の3つのフラグで，時間のかかる追加の推定を行うかどうかを切り替える。推定結果はすべて `results/h1/mcmc_cache/` に保存され，同じ設定で再実行すると読み込まれる。
+
+```{r}
+#| label: h1-setup
+#| eval: false
+# (このチャンクは冒頭の「結果の要約」で ref.label により実行済み。ここではコードを示すだけ)
+library(tidyverse)
+source("R/hypothesis_1_functions.R")
+
+# 時間のかかる追加の推定（すべてキャッシュされる）
+run_bridge_check <- TRUE      # H1・H0 を事後サンプル40,000個で推定し，ブリッジサンプリングを5回（3観点 × 2モデル）
+run_prior_refit <- TRUE       # β の事前分布の尺度を r = 1/2・1 にして再推定（3観点 × 2）
+show_default_bridge <- TRUE   # 参考：事後サンプル8000個で H1・H0 を推定し，ブリッジサンプリングを1回（3観点 × 2モデル）
+
+bridge_iter <- 12000          # 1チェーンあたり（うち2000回はウォームアップ）
+bridge_seeds <- 1:5
+
+aspects_h1 <- c("semantic", "naturalness", "cultural_validity")
+# 予測：意味的忠実性・文化的妥当性は人手版が高い，自然さは差なし
+predictions_h1 <- c(semantic = "human_better", naturalness = "no_difference",
+                    cultural_validity = "human_better")
+
+h1_scale_names <- readr::read_csv("../../scale_names.csv", col_types = "cc")$scale_name
+h1_scale_labels <- sprintf("%02d  %s", 1:22, h1_scale_names)
+# 解析から除外する尺度。尺度IDとラベルの番号は元の1〜22のまま残す。
+excluded_scales <- c(TIVS = 11L)
+h1_scale_levels <- h1_scale_labels[-excluded_scales]  # 図の並び順（除外した尺度を除く）
+h1_aspect_labels <- c(
+  semantic = "意味的忠実性",
+  naturalness = "表現の自然さ",
+  cultural_validity = "文化的妥当性"
+)
+```
+
+```{r}
+#| label: session-info
+sessionInfo()
+cmdstanr::cmdstan_version()
+cat("1チェーンあたりのスレッド数:", h1_threads_per_chain(), "\n")
+```
+
+### データ
+
+入力は `data/3_data_processed/ManyScales_専門家_processed_A.csv`〜`F.csv`（1行1人のワイドデータ）である。`h1_read()` で「専門家×尺度×版×観点」につき1行の縦長データにし，`h1_prepare()` で解析用得点・`x`・`pair_id`・提示順の変数を作る。MCS（セットC/D）は尺度ID = 10 としてまとめる。TIVS（尺度ID 11，セットD）は解析から除外し，残りの21尺度を分析する（尺度IDは元の番号のまま）。
+
+```{r}
+#| label: h1-data
+#| eval: false
+# (このチャンクは冒頭の「結果の要約」で ref.label により実行済み。ここではコードを示すだけ)
+# 文化的妥当性は処理済みデータで逆転済みなので，3観点ともそのまま用いる
+high_is_good <- c(semantic = TRUE, naturalness = TRUE, cultural_validity = TRUE)
+raw_h1 <- h1_read()
+raw_h1 <- raw_h1[!raw_h1$scale_id %in% excluded_scales, ]  # TIVS を除外
+d_h1 <- h1_prepare(raw_h1, high_is_good)
+```
+
+```{r}
+#| label: h1-data-check
+# 観点 × 版ごとの評定数
+table(d_h1$aspect, d_h1$version)
+# セット別・提示順別の専門家数
+with(unique(raw_h1[c("set", "subject_id", "trans_cond")]), table(set, trans_cond))
+# 欠測（除外前）
+with(raw_h1, table(aspect, version, missing = is.na(response)))
+```
+
+### 記述的な可視化
+
+モデルを推定する前に，両版に回答した専門家だけを観点・尺度ごとに取り出して比べる（主解析の `d_h1` は変えない）。平均値は1〜5を数値として計算した記述統計であり，モデルの推定値ではない。
+
+```{r}
+#| label: h1-plot-data
+h1_plot_pairs <- d_h1 |>
+  select(subject_id, scale_id, aspect, version, score) |>
+  pivot_wider(names_from = version, values_from = score) |>
+  filter(!is.na(human), !is.na(ai)) |>
+  mutate(
+    scale_id = as.integer(as.character(scale_id)),
+    scale_label = factor(h1_scale_labels[scale_id], levels = rev(h1_scale_levels)),
+    aspect_label = factor(h1_aspect_labels[aspect], levels = unname(h1_aspect_labels)),
+    difference = human - ai
+  )
+
+h1_plot_means <- h1_plot_pairs |>
+  group_by(scale_id, scale_label, aspect_label) |>
+  summarise(
+    n_pairs = n(), human_mean = mean(human), ai_mean = mean(ai),
+    mean_difference = mean(difference), .groups = "drop"
+  )
+```
+
+```{r}
+#| label: fig-version-means
+#| fig-width: 12
+#| fig-height: 9
+#| fig-cap: "尺度別の平均評定（記述統計）。線は同じ尺度の人手版とAI版の平均を結ぶ。"
+ggplot(h1_plot_means, aes(y = scale_label)) +
+  geom_segment(aes(x = ai_mean, xend = human_mean, yend = scale_label),
+               colour = "grey65", linewidth = 0.7) +
+  geom_point(aes(x = ai_mean, colour = "AI版", shape = "AI版"), size = 2.6) +
+  geom_point(aes(x = human_mean, colour = "人手版", shape = "人手版"), size = 2.6) +
+  facet_wrap(~ aspect_label, nrow = 1, drop = FALSE) +
+  scale_x_continuous(breaks = 1:5, limits = c(1, 5)) +
+  scale_y_discrete(drop = FALSE) +
+  scale_colour_manual(values = c("AI版" = "#0072B2", "人手版" = "#D55E00")) +
+  scale_shape_manual(values = c("AI版" = 16, "人手版" = 17)) +
+  labs(x = "平均評定（高いほど好評価）", y = NULL, colour = NULL, shape = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom", panel.grid.minor = element_blank())
+```
+
+```{r}
+#| label: fig-paired-differences
+#| fig-width: 12
+#| fig-height: 9
+#| fig-cap: "尺度別の参加者内評定差（記述統計）。小さい点は各専門家（縦方向にのみずらしている），黒い菱形は尺度内平均。"
+ggplot(h1_plot_pairs, aes(x = difference, y = scale_label)) +
+  geom_vline(xintercept = 0, linetype = 2, colour = "grey45") +
+  geom_point(position = position_jitter(width = 0, height = 0.16, seed = 20261004),
+             colour = "#0072B2", alpha = 0.35, size = 1.5) +
+  geom_point(data = h1_plot_means, aes(x = mean_difference),
+             colour = "black", shape = 18, size = 3) +
+  facet_wrap(~ aspect_label, nrow = 1, drop = FALSE) +
+  scale_x_continuous(breaks = -4:4, limits = c(-4, 4)) +
+  scale_y_discrete(drop = FALSE) +
+  labs(x = "人手版 − AI版（負：AI版優位／正：人手版優位）", y = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(panel.grid.minor = element_blank())
+```
+
+### 主解析の推定と診断
+
+```{r}
+#| label: h1-fit
+#| eval: false
+# (このチャンクは冒頭の「結果の要約」で ref.label により実行済み。ここではコードを示すだけ)
+fits_h1 <- setNames(lapply(aspects_h1, function(a) h1_fit(d_h1, a)), aspects_h1)
+```
+
+収束の目安は，R-hat < 1.01，bulk/tail ESS > 400，発散0，最大 tree depth への到達0である（`ok` 列）。
+
+```{r}
+#| label: tbl-diagnostics
+#| tbl-cap: "主解析モデルの収束診断（全パラメータの最悪値）"
+h1_diag_table(fits_h1) |> knitr::kable(digits = 3)
+```
+
+事後予測チェック：評定の分布を，全体と版別に再現できているかを見る。
+
+```{r}
+#| label: h1-ppcheck
+#| fig-width: 8
+#| fig-height: 3.5
+for (a in aspects_h1) {
+  print(brms::pp_check(fits_h1[[a]], type = "bars", ndraws = 100) +
+          ggtitle(h1_aspect_labels[[a]]))
+  print(brms::pp_check(fits_h1[[a]], type = "bars_grouped", group = "x", ndraws = 100) +
+          ggtitle(paste0(h1_aspect_labels[[a]], "（x = −0.5：AI版，0.5：人手版）")))
+}
+```
+
+### 全体の結果
+
+```{r}
+#| label: h1-results
+#| eval: false
+# (このチャンクは冒頭の「結果の要約」で ref.label により実行済み。ここではコードを示すだけ)
+results_h1 <- lapply(fits_h1, h1_results)
+h1_pop <- h1_population_table(results_h1)
+h1_beta <- h1_beta_draws(fits_h1)
+```
+
+```{r}
+#| label: tbl-population
+#| tbl-cap: "平均翻訳効果 β（対数オッズ），オッズ比，今回の21尺度の評定点差，翻訳効果の尺度間SD"
+h1_pop |>
+  transmute(
+    観点 = h1_aspect_labels[aspect],
+    `β［95%CrI］` = sprintf("%.2f [%.2f, %.2f]", beta_mean, beta_lower95, beta_upper95),
+    `オッズ比［95%CrI］` = sprintf("%.2f [%.2f, %.2f]",
+                               exp(beta_mean), exp(beta_lower95), exp(beta_upper95)),
+    `Pr(β > 0)` = sprintf("%.3f", pr_human_better),
+    `評定点差［95%CrI］` = sprintf("%+.3f [%+.3f, %+.3f]",
+                              points_mean, points_lower95, points_upper95),
+    `尺度間SD（中央値）` = sprintf("%.2f", scale_sd_median)
+  ) |>
+  knitr::kable()
+```
+
+@fig-summary-beta と @fig-summary-points を参照。オッズ比の列の中央は exp(事後平均) で，事後中央値とはわずかに異なる。
+
+### 尺度別の結果 {#sec-scale}
+
+平均差が小さくても尺度間の差が大きければ「どの尺度でも同等」とは言えない。部分プーリング後の尺度別効果を示す。尺度別の判定は探索的に解釈する。
+
+```{r}
+#| label: h1-scale-data
+h1_scale_lo <- h1_scale_table(results_h1, "scale_log_odds")
+h1_scale_pt <- h1_scale_table(results_h1, "scale_points")
+
+# フォレストプロット：尺度別の効果と，最下段に全体（母集団平均 or 21尺度平均）を置く
+h1_forest <- function(scale_tab, overall, xlab) {
+  overall_label <- "全体"
+  scale_tab |>
+    mutate(label = h1_scale_labels[scale_id], overall = FALSE) |>
+    bind_rows(overall |> mutate(label = overall_label, overall = TRUE)) |>
+    mutate(label = factor(label, levels = rev(c(h1_scale_levels, overall_label))),
+           aspect_label = factor(h1_aspect_labels[aspect], levels = h1_aspect_labels),
+           side = case_when(lower95 > 0 ~ "人手版が高い", upper95 < 0 ~ "AI版が高い",
+                            TRUE ~ "0を含む")) |>
+    ggplot(aes(x = mean, y = label, xmin = lower95, xmax = upper95, colour = side)) +
+    geom_vline(xintercept = 0, linetype = 2, colour = "grey45") +
+    geom_pointrange(aes(shape = overall), size = 0.3, linewidth = 0.5) +
+    facet_wrap(~ aspect_label, nrow = 1) +
+    scale_shape_manual(values = c(`FALSE` = 16, `TRUE` = 18), guide = "none") +
+    scale_colour_manual(values = c("人手版が高い" = "#D55E00", "AI版が高い" = "#0072B2",
+                                   "0を含む" = "grey40")) +
+    labs(x = xlab, y = NULL, colour = "95%CrI") +
+    theme_minimal(base_size = 11) +
+    theme(legend.position = "bottom", panel.grid.minor = element_blank())
+}
+```
+
+```{r}
+#| label: fig-forest-log-odds
+#| fig-width: 12
+#| fig-height: 8
+#| fig-cap: "尺度別の翻訳効果（対数オッズ，事後平均と95%信用区間）。最下段の「全体」は平均翻訳効果 β。"
+h1_forest(h1_scale_lo,
+          h1_pop |> transmute(aspect, mean = beta_mean, lower95 = beta_lower95,
+                              upper95 = beta_upper95),
+          "人手版 − AI版（対数オッズ）")
+```
+
+```{r}
+#| label: fig-forest-points
+#| fig-width: 12
+#| fig-height: 8
+#| fig-cap: "尺度別の予測評定差（1〜5点，事後平均と95%信用区間）。最下段の「全体」は今回の21尺度の等重み平均。"
+h1_forest(h1_scale_pt,
+          h1_pop |> transmute(aspect, mean = points_mean, lower95 = points_lower95,
+                              upper95 = points_upper95),
+          "人手版 − AI版（評定点）")
+```
+
+```{r}
+#| label: tbl-scale-count
+#| tbl-cap: "95%信用区間が0を含まない尺度の数（評定点）"
+h1_scale_pt |>
+  group_by(観点 = factor(h1_aspect_labels[aspect], levels = h1_aspect_labels)) |>
+  summarise(人手版が高い = sum(lower95 > 0), AI版が高い = sum(upper95 < 0),
+            `0を含む` = sum(lower95 <= 0 & upper95 >= 0)) |>
+  knitr::kable()
+```
+
+### ベイズファクター（Savage–Dickey法）
+
+```{r}
+#| label: h1-bf-sd
+#| eval: false
+# (このチャンクは冒頭の「結果の要約」で ref.label により実行済み。ここではコードを示すだけ)
+h1_sd_bf <- bind_rows(lapply(aspects_h1, function(a) {
+  cbind(aspect = a, h1_savage_dickey(fits_h1[[a]], prior_r = h1_prior_r))
+}))
+```
+
+```{r}
+#| label: tbl-sd-bf
+#| tbl-cap: "Savage–Dickey 法による BF（β の事前分布 Cauchy(0, √2/2)）。右の2列は計算の安定性の確認（BF01 がおおむね一致すればよい）。"
+h1_sd_bf |>
+  transmute(
+    観点 = h1_aspect_labels[aspect],
+    BF10, BF01, `BF+0` = BF_plus0, `BF-0` = BF_minus0,
+    `BF01（チェーン別の範囲）` = sprintf("%.3g〜%.3g", BF01_chain_min, BF01_chain_max),
+    `BF01（正規近似）` = BF01_normal_approx
+  ) |>
+  knitr::kable(digits = 3)
+```
+
+Savage–Dickey 法の考え方を図で示す。0における事後密度（実線）と事前密度（破線）の高さの比が BF01 である。事後密度の方が高ければ，データによって β = 0 の信ぴょう性が上がった（H0 支持）ことを意味する。
+
+```{r}
+#| label: fig-savage-dickey
+#| fig-width: 10
+#| fig-height: 3.5
+#| fig-cap: "β の事前分布 Cauchy(0, 1.28)（r = √2/2，破線）と事後分布（実線）。点は β = 0 における密度で，その比（事後 / 事前）が BF01。"
+h1_sd_curves <- h1_beta |>
+  group_by(aspect) |>
+  reframe({
+    dens <- density(beta, from = -2.5, to = 2.5, n = 512)
+    tibble(beta = dens$x, 事後分布 = dens$y, 事前分布 = h1_prior_density(dens$x, h1_prior_r))
+  }) |>
+  pivot_longer(c(事後分布, 事前分布), names_to = "分布", values_to = "density")
+h1_sd_points <- h1_sd_bf |>
+  transmute(aspect, 事後分布 = BF01 * h1_prior_density(0, h1_prior_r),
+            事前分布 = h1_prior_density(0, h1_prior_r),
+            label = sprintf("BF01 = %.2f", BF01)) |>
+  pivot_longer(c(事後分布, 事前分布), names_to = "分布", values_to = "density")
+ggplot(h1_sd_curves, aes(beta, density, linetype = 分布)) +
+  geom_vline(xintercept = 0, colour = "grey70") +
+  geom_line() +
+  geom_point(data = h1_sd_points, aes(x = 0), size = 2) +
+  geom_text(data = distinct(h1_sd_points, aspect, label),
+            aes(x = 2.4, y = Inf, label = label), inherit.aes = FALSE,
+            hjust = 1, vjust = 1.5, size = 3.5) +
+  facet_wrap(~ factor(h1_aspect_labels[aspect], levels = h1_aspect_labels), nrow = 1) +
+  scale_linetype_manual(values = c(事後分布 = "solid", 事前分布 = "dashed")) +
+  labs(x = "β（人手版 − AI版，対数オッズ）", y = "密度", linetype = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom", panel.grid.minor = element_blank())
+```
+
+### 事前分布の感度分析
+
+```{r}
+#| label: h1-bf-sens
+#| eval: false
+# (このチャンクは冒頭の「結果の要約」で ref.label により実行済み。ここではコードを示すだけ)
+# 主解析の事後サンプルの重みづけで，Cauchy の尺度 r を 0.1〜1.5 に変えたときの BF を求める（再推定なし）
+h1_sens <- bind_rows(lapply(aspects_h1, function(a) {
+  bf10 <- h1_sd_bf$BF10[h1_sd_bf$aspect == a]
+  cbind(aspect = a, h1_bf_prior_curve(fits_h1[[a]], bf10_base = bf10, base_r = h1_prior_r))
+}))
+```
+
+r = 1/2・1 で実際に再推定し，Savage–Dickey 法で求めた BF を重みづけの結果と比べる（`run_prior_refit = TRUE` のとき）。
+
+```{r}
+#| label: h1-prior-refit
+h1_sens_refit <- NULL
+if (run_prior_refit) {
+  fits_h1_prior <- list()
+  for (r in c(0.5, 1)) {
+    for (a in aspects_h1) {
+      fits_h1_prior[[paste(a, r)]] <- h1_fit(d_h1, a, prior_r = r)
+    }
+  }
+  h1_sens_refit <- bind_rows(lapply(names(fits_h1_prior), function(k) {
+    a <- sub(" .*", "", k)
+    r <- as.numeric(sub(".* ", "", k))
+    cbind(aspect = a, h1_savage_dickey(fits_h1_prior[[k]], prior_r = r))
+  }))
+  print(h1_diag_table(fits_h1_prior))
+  # r は浮動小数なので，丸めてから突き合わせる
+  h1_sens_refit |>
+    select(aspect, prior_r, BF01, BF_plus0) |>
+    mutate(prior_r = round(prior_r, 6)) |>
+    left_join(h1_sens |> transmute(aspect, prior_r = round(prior_r, 6), BF01_weighting = BF01,
+                                   BF_plus0_weighting = BF_plus0),
+              by = c("aspect", "prior_r")) |>
+    knitr::kable(digits = 3, caption = "再推定と重みづけによる BF の比較")
+}
+```
+
+```{r}
+#| label: fig-prior-sensitivity
+#| fig-width: 10
+#| fig-height: 4
+#| fig-cap: "β の事前分布 Cauchy の尺度 r（δ の単位）と，仮説の予測に対する BF（意味的忠実性・文化的妥当性は BF+0，自然さは BF01）。灰色の帯は判断保留（1/3〜3）。縦の点線が事前登録の r = √2/2。点線部分は重みの有効サンプルサイズが1000未満で誤差が大きい範囲。三角は再推定による値。"
+ggplot(h1_pred_bf(h1_sens) |>
+         mutate(aspect_label = factor(h1_aspect_labels[aspect], levels = h1_aspect_labels)),
+       aes(prior_r, bf_pred)) +
+  annotate("rect", xmin = -Inf, xmax = Inf, ymin = 1/3, ymax = 3, fill = "grey92") +
+  geom_hline(yintercept = 1, colour = "grey60") +
+  # 線種は1本の線の途中で変えられないので，全体を点線で描き，ESS ≥ 1000 の区間だけ実線で重ねる
+  geom_line(linetype = "dotted") +
+  geom_line(data = function(d) d |>
+              group_by(aspect_label) |>
+              mutate(run = cumsum(ess_w >= 1000 & !lag(ess_w >= 1000, default = FALSE))) |>
+              filter(ess_w >= 1000),
+            aes(group = run)) +
+  geom_vline(xintercept = h1_prior_r, linetype = 3, colour = "grey50") +
+  { if (!is.null(h1_sens_refit))
+      geom_point(data = h1_pred_bf(h1_sens_refit) |>
+                   mutate(aspect_label = factor(h1_aspect_labels[aspect], levels = h1_aspect_labels)),
+                 shape = 17, size = 2.5, colour = "#D55E00") } +
+  facet_wrap(~ aspect_label, nrow = 1) +
+  scale_y_log10(breaks = h1_bf_breaks, labels = h1_bf_labels) +
+  labs(x = "β の事前分布 Cauchy の尺度 r（δ の単位，主解析は √2/2 ≈ 0.71）",
+       y = "予測に対する BF（> 3 で支持）") +
+  theme_minimal(base_size = 11) +
+  theme(panel.grid.minor = element_blank())
+```
+
+r を小さくする（小さな効果を想定する）ほど H1 は H0 に近づき，BF は1に近づく。r を大きくする（大きな効果も想定する）ほど，小さな効果しか観測されないデータでは H0 が有利になる。結論がこの範囲で変わるかどうかを判定表の「事前分布の感度」列に示した。
+
+### ブリッジサンプリングによる確認 {#sec-bridge}
+
+```{r}
+#| label: h1-bridge
+#| eval: false
+# (このチャンクは冒頭の「結果の要約」で ref.label により実行済み。ここではコードを示すだけ)
+h1_bridge <- NULL
+if (run_bridge_check) {
+  h1_bridge <- setNames(lapply(aspects_h1, function(a) {
+    h1_bridge_check(d_h1, a, seeds = bridge_seeds, iter = bridge_iter)
+  }), aspects_h1)
+}
+```
+
+```{r}
+#| label: h1-bridge-show
+if (!is.null(h1_bridge)) {
+  # 推定の収束（H1・H0 とも）
+  print(bind_rows(lapply(h1_bridge, `[[`, "diagnostics"), .id = "aspect"))
+  bind_rows(lapply(h1_bridge, `[[`, "bridge")) |>
+    knitr::kable(digits = 3, caption = "シードごとのブリッジサンプリングの結果（error は bridgesampling の推定誤差）")
+}
+```
+
+参考として，主解析と同じ事後サンプル数（8000個）で H1・H0 を推定し，ブリッジサンプリングを1回だけ行った BF10 も並べる。追加で6モデルを推定するので，省く場合は `show_default_bridge = FALSE` とする。
+
+```{r}
+#| label: h1-bridge-default
+h1_bf_default <- NULL
+if (show_default_bridge) {
+  h1_bf_default <- bind_rows(lapply(aspects_h1, function(a) {
+    h1_bridge_check(d_h1, a, seeds = 1, iter = 4000)$bridge |> select(aspect, BF10)
+  }))
+  h1_bf_default
+}
+```
+
+```{r}
+#| label: fig-bf-methods
+#| fig-width: 9
+#| fig-height: 4
+#| fig-cap: "計算方法による BF10 の比較（対数軸）。括弧内は事後サンプル数と計算回数。同じ観点の点が近いほど計算が安定している。"
+h1_bf_methods <- bind_rows(
+  h1_sd_bf |> transmute(aspect, method = "Savage–Dickey（主解析, 8000）", BF10),
+  if (!is.null(h1_bf_default))
+    h1_bf_default |> mutate(method = "ブリッジ・通常の事後サンプル数（8000, 1回）"),
+  if (!is.null(h1_bridge)) bind_rows(
+    bind_rows(lapply(h1_bridge, `[[`, "bridge")) |>
+      transmute(aspect, method = "ブリッジ・再計算（40000, 5回）", BF10),
+    tibble(aspect = names(h1_bridge),
+           method = "Savage–Dickey（再推定, 40000）",
+           BF10 = sapply(h1_bridge, `[[`, "BF10_savage_dickey")))
+) |>
+  mutate(aspect_label = factor(h1_aspect_labels[aspect], levels = rev(h1_aspect_labels)))
+ggplot(h1_bf_methods, aes(BF10, aspect_label, colour = method, shape = method)) +
+  annotate("rect", xmin = 1/3, xmax = 3, ymin = -Inf, ymax = Inf, fill = "grey92") +
+  geom_vline(xintercept = 1, colour = "grey60") +
+  geom_point(size = 2.5, alpha = 0.8,
+             position = position_dodge(width = 0.6)) +
+  scale_x_log10(labels = function(x) format(x, scientific = FALSE, drop0trailing = TRUE)) +
+  labs(x = "BF10（右ほど平均差ありを支持）", y = NULL, colour = NULL, shape = NULL) +
+  guides(colour = guide_legend(ncol = 2)) +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom", panel.grid.minor = element_blank())
+```
+
+事後サンプルを増やしたブリッジサンプリングが5回とも Savage–Dickey 法の値に近ければ，BF の計算は安定していると判断する。通常の事後サンプル数で1回だけ計算した値がこれらから離れている場合，その値はブリッジサンプリングのモンテカルロ誤差によるものであり，結論には用いない。事後サンプルを増やしてもシード間で大きくばらつく，あるいは Savage–Dickey 法と一致しない場合は，Savage–Dickey 法の前提（@sec-bf-method）とモデルの推定を見直す。
+
+### 判定
+
+```{r}
+#| label: h1-verdict
+#| eval: false
+# (このチャンクは冒頭の「結果の要約」で ref.label により実行済み。ここではコードを示すだけ)
+h1_verdict_tab <- bind_rows(lapply(aspects_h1, function(a) {
+  h1_verdict(a, predictions_h1[[a]], pop = h1_pop, sd_bf = h1_sd_bf, sens = h1_sens)
+}))
+
+# ブリッジサンプリング（5回の中央値）と Savage–Dickey 法（同じ事後サンプル）の一致
+h1_verdict_tab$bridge_check <- sapply(aspects_h1, function(a) {
+  if (is.null(h1_bridge)) return("未実施")
+  bridge_bf10 <- median(h1_bridge[[a]]$bridge$BF10)
+  sd_bf10 <- h1_bridge[[a]]$BF10_savage_dickey
+  same_label <- h1_bf_label(1 / bridge_bf10, "H0", "H1") == h1_bf_label(1 / sd_bf10, "H0", "H1")
+  close <- abs(log(bridge_bf10 / sd_bf10)) < log(3)
+  sprintf("%s（ブリッジ %.3g，SD %.3g）",
+          if (same_label && close) "一致" else "不一致", bridge_bf10, sd_bf10)
+})
+```
+
+判定表は @tbl-verdict に示した。
+
+### 結論の図の作成
+
+```{r}
+#| label: h1-fig-data
+#| eval: false
+# (このチャンクは冒頭の「結果の要約」で ref.label により実行済み。ここではコードを示すだけ)
+
+# 仮説の予測の向きに合わせた BF（人手版優位の予測は BF+0，差なしの予測は BF01）
+h1_pred_bf <- function(tab) {
+  tab |> mutate(bf_pred = ifelse(predictions_h1[aspect] == "human_better", BF_plus0, BF01))
+}
+h1_bf_breaks <- c(1/100, 1/30, 1/10, 1/3, 1, 3, 10, 30, 100)
+h1_bf_labels <- c("1/100", "1/30", "1/10", "1/3", "1", "3", "10", "30", "100")
+
+# (1) 仮説の予測に対する BF（r = 1/2・√2/2・1）
+h1_evidence <- h1_pred_bf(h1_sens) |>
+  filter(h1_r_in(prior_r, h1_sens_rs)) |>
+  mutate(
+    test = ifelse(predictions_h1[aspect] == "human_better",
+                  "人手版 > AI版 vs 平均差0（BF+0）", "平均差0 vs 平均差あり（BF01）"),
+    row = factor(paste0(h1_aspect_labels[aspect], "\n", test),
+                 levels = rev(paste0(h1_aspect_labels, "\n",
+                                     ifelse(predictions_h1 == "human_better",
+                                            "人手版 > AI版 vs 平均差0（BF+0）",
+                                            "平均差0 vs 平均差あり（BF01）")))),
+    main = h1_r_in(prior_r, h1_prior_r)
+  )
+h1_bf_range <- range(c(1/30, 30, h1_evidence$bf_pred))
+fig_h1_evidence <- ggplot(h1_evidence, aes(bf_pred, row)) +
+  annotate("rect", xmin = 1/3, xmax = 3, ymin = -Inf, ymax = Inf, fill = "grey92") +
+  annotate("text", x = c(sqrt(h1_bf_range[1] / 3), 1, sqrt(h1_bf_range[2] * 3)), y = Inf,
+           label = c("← 予測に反する", "判断保留", "予測を支持 →"),
+           vjust = 1.3, size = 3.5, colour = "grey30") +
+  geom_vline(xintercept = 1, colour = "grey60") +
+  geom_line(aes(group = row), colour = "grey50") +
+  geom_point(aes(size = main, colour = main)) +
+  geom_text(data = filter(h1_evidence, main),
+            aes(label = sprintf("%.2g", bf_pred)), vjust = -1.1, size = 3.5) +
+  scale_x_log10(limits = h1_bf_range, breaks = h1_bf_breaks, labels = h1_bf_labels) +
+  scale_size_manual(values = c(`TRUE` = 3.5, `FALSE` = 1.8), guide = "none") +
+  scale_colour_manual(values = c(`TRUE` = "black", `FALSE` = "grey45"), guide = "none") +
+  scale_y_discrete(expand = expansion(add = c(0.6, 1.2))) +
+  labs(x = "仮説の予測に対するベイズファクター（対数軸）", y = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(panel.grid.minor = element_blank())
+
+# (2) β の事後分布（95%CrI を塗る）
+h1_beta_density <- h1_beta |>
+  group_by(aspect) |>
+  reframe({
+    dens <- density(beta, n = 512)
+    ci <- quantile(beta, c(.025, .975))
+    tibble(beta = dens$x, density = dens$y, in_ci = dens$x >= ci[1] & dens$x <= ci[2])
+  }) |>
+  mutate(aspect_label = factor(h1_aspect_labels[aspect], levels = h1_aspect_labels))
+h1_beta_text <- h1_pop |>
+  mutate(aspect_label = factor(h1_aspect_labels[aspect], levels = h1_aspect_labels),
+         label = sprintf("予測：%s\nβ = %.2f [%.2f, %.2f]\nPr(人手版が高い) = %.1f%%",
+                         ifelse(predictions_h1[aspect] == "human_better",
+                                "人手版 > AI版", "差なし"),
+                         beta_mean, beta_lower95, beta_upper95, 100 * pr_human_better))
+fig_h1_beta <- ggplot(h1_beta_density, aes(beta, density)) +
+  geom_area(fill = "grey85") +
+  geom_area(data = filter(h1_beta_density, in_ci), fill = "#56B4E9", alpha = 0.8) +
+  geom_line() +
+  geom_vline(xintercept = 0, linetype = 2) +
+  geom_text(data = h1_beta_text, aes(x = -Inf, y = Inf, label = label),
+            hjust = -0.03, vjust = 1.2, size = 3.3, lineheight = 0.95) +
+  geom_text(data = tibble(beta = c(-1.4, 1.4), density = 0,
+                          label = c("← AI版が高い", "人手版が高い →")),
+            aes(label = label), vjust = -0.5, size = 3, colour = "grey30") +
+  facet_wrap(~ aspect_label, ncol = 1) +
+  coord_cartesian(xlim = c(-1.6, 1.6)) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.6))) +
+  labs(x = "平均翻訳効果 β（人手版 − AI版，対数オッズ）", y = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(axis.text.y = element_blank(), panel.grid.minor = element_blank())
+
+# (3) 今回の21尺度の評定点差
+fig_h1_points <- h1_pop |>
+  mutate(aspect_label = factor(h1_aspect_labels[aspect], levels = rev(h1_aspect_labels))) |>
+  ggplot(aes(points_mean, aspect_label, xmin = points_lower95, xmax = points_upper95)) +
+  geom_vline(xintercept = 0, linetype = 2) +
+  geom_pointrange() +
+  geom_text(aes(label = sprintf("%+.2f [%+.2f, %+.2f]", points_mean,
+                                points_lower95, points_upper95)),
+            vjust = -1, size = 3.3) +
+  labs(x = "予測評定の差（人手版 − AI版，1〜5点）", y = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(panel.grid.minor = element_blank())
+```
+
+### 追加の感度分析
+
+#### 事前予測
+
+```{r}
+#| label: h1-prior-predictive
+#| fig-width: 8
+#| fig-height: 3.5
+prior_fits_h1 <- setNames(
+  lapply(aspects_h1, function(a) h1_fit(d_h1, a, prior_only = TRUE)),
+  aspects_h1
+)
+for (a in aspects_h1) {
+  print(brms::pp_check(prior_fits_h1[[a]], type = "bars", ndraws = 100) +
+          ggtitle(h1_aspect_labels[[a]]))
+}
+```
+
+#### 完全ペアのみ・提示順の調整
+
+両版がそろったペアのみのモデル（`complete_pairs = TRUE`）と，評価時期・提示順を加えたモデル（`adjust_order = TRUE`）で β を推定し，主解析と比べる。
+
+```{r}
+#| label: h1-sensitivity-fits
+d_h1_pairs <- h1_prepare(raw_h1, high_is_good, complete_pairs = TRUE)
+fits_h1_pairs <- setNames(lapply(aspects_h1, function(a) h1_fit(d_h1_pairs, a)), aspects_h1)
+fits_h1_order <- setNames(lapply(aspects_h1, function(a) h1_fit(d_h1, a, adjust_order = TRUE)),
+                          aspects_h1)
+bind_rows(完全ペアのみ = h1_diag_table(fits_h1_pairs),
+          提示順を調整 = h1_diag_table(fits_h1_order), .id = "model") |>
+  knitr::kable(digits = 3, caption = "感度分析モデルの収束診断")
+```
+
+```{r}
+#| label: fig-robustness
+#| fig-width: 9
+#| fig-height: 4.5
+#| fig-cap: "モデルの設定を変えたときの平均翻訳効果 β（事後平均と95%信用区間）。どの設定でも0を挟む位置関係が同じなら，結論は設定に頑健である。"
+h1_beta_by_model <- function(fits, model) {
+  bind_rows(lapply(names(fits), function(a) {
+    s <- h1_summary(posterior::as_draws_df(fits[[a]])$b_x)
+    tibble(aspect = a, model = model, mean = s[["mean"]],
+           lower95 = s[["lower95"]], upper95 = s[["upper95"]])
+  }))
+}
+h1_robust <- bind_rows(
+  h1_beta_by_model(fits_h1, "主解析"),
+  h1_beta_by_model(fits_h1_pairs, "完全ペアのみ"),
+  h1_beta_by_model(fits_h1_order, "提示順・評価時期を調整"),
+  if (run_prior_refit) bind_rows(
+    h1_beta_by_model(fits_h1_prior[paste(aspects_h1, 0.5)] |> setNames(aspects_h1),
+                     "β の事前分布 r = 1/2"),
+    h1_beta_by_model(fits_h1_prior[paste(aspects_h1, 1)] |> setNames(aspects_h1),
+                     "β の事前分布 r = 1"))
+)
+h1_robust |>
+  mutate(model = factor(model, levels = rev(unique(model))),
+         aspect_label = factor(h1_aspect_labels[aspect], levels = h1_aspect_labels)) |>
+  ggplot(aes(mean, model, xmin = lower95, xmax = upper95)) +
+  geom_vline(xintercept = 0, linetype = 2) +
+  geom_pointrange(aes(colour = model == "主解析"), size = 0.3) +
+  facet_wrap(~ aspect_label, nrow = 1) +
+  scale_colour_manual(values = c(`TRUE` = "black", `FALSE` = "grey45"), guide = "none") +
+  labs(x = "β（人手版 − AI版，対数オッズ）", y = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(panel.grid.minor = element_blank())
+```
+
+### 結果の保存
+
+```{r}
+#| label: h1-save
+dir.create("results/h1", recursive = TRUE, showWarnings = FALSE)
+saveRDS(results_h1, "results/h1/ordinal_results.rds")
+saveRDS(list(savage_dickey = h1_sd_bf, prior_sensitivity = h1_sens,
+             prior_refit = h1_sens_refit, bridge = h1_bridge,
+             bridge_default = h1_bf_default, verdict = h1_verdict_tab),
+        "results/h1/bayes_factors_v2.rds")
+capture.output(sessionInfo(), file = "results/h1/sessionInfo.txt")
+```
+
+## 参考情報
+
+- Bürkner & Vuorre (2019), [Ordinal Regression Models in Psychology: A Tutorial](https://paulbuerkner.com/publications/pdf/2019__Buerkner_et_al__Advances_in_Methods_and_Practices_in_Psychological_Science.pdf)
+- Wagenmakers, Lodewyckx, Kuriyal, & Grasman (2010). Bayesian hypothesis testing for psychologists: A tutorial on the Savage–Dickey method. *Cognitive Psychology, 60*, 158–189.
+- Morey & Wagenmakers (2014). Simple relation between Bayesian order-restricted and point-null hypothesis tests. *Statistics & Probability Letters, 92*, 121–124.
+- Gronau et al. (2017). A tutorial on bridge sampling. *Journal of Mathematical Psychology, 81*, 80–97.
+- [brms: bayes_factor](https://paulbuerkner.com/brms/reference/bayes_factor.brmsfit.html)
+- [brms: hypothesis](https://paulbuerkner.com/brms/reference/hypothesis.brmsfit.html)
+- [brms: posterior_epred](https://paulbuerkner.com/brms/reference/posterior_epred.brmsfit.html)

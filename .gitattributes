@@ -1,0 +1,10 @@
+*.rds binary
+*.Rdata binary
+*.npz binary
+*.parquet binary
+*.xlsx binary
+*.png binary
+*.pdf binary
+# Preserve the exact author/upstream snapshots across Git line-ending settings.
+translation/LLMTranslate4Hitode/app.R -text
+translation/LLMTranslate/** -text

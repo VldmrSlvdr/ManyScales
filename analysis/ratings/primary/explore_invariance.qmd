@@ -1,0 +1,299 @@
+---
+title: "探索的分析: 訳に苦労した項目の測定不変性(部分不変性)"
+date: today
+date-format: "YYYY-MM-DD"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    number-sections: true
+    embed-resources: true
+  pdf:
+    pdf-engine: lualatex
+    documentclass: ltjsarticle
+    papersize: a4
+    geometry: margin=15mm
+    toc: true
+    toc-depth: 2
+    number-sections: true
+    include-in-header:
+      text: |
+        % 表を小さめの文字にして横幅に収める
+        \AtBeginEnvironment{longtable}{\scriptsize}
+        % 長いコードの行を折り返す
+        \usepackage{fvextra}
+        \DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,commandchars=\\\{\}}
+---
+
+## 目的
+
+Stage 1 の計画では，探索的分析の1つとして，文化適応が求められる語や項目について LLM 翻訳と人手翻訳の扱いを比較することにしていた。本節はこれに当たる。翻訳チームは，訳すときに苦労した項目を6尺度で18項目挙げた(三浦先生のスプレッドシート 10/22 版)。ここでは，これらの項目が人手版と AI 版とで同じように働いているかを，項目単位の測定不変性(部分不変性)として調べる。
+
+具体的には，対象項目が属する下位因子ごとに両版を1つのモデルに入れる。そのうえで，対象項目だけ版の間で違う働きを許したときに，すべての項目を等値にしたモデルよりも当てはまりがどれだけ良くなるか，その項目の得点の出方がどれだけ違うかを見る。
+
+最初 DIF(特異項目機能)のイメージで提案したが，生成AIによると適切ではないらしい。DIF は異なる人の集団の間で項目の働きを比べるものであるが，本研究では同じ人が両方の版に答えており，変わるのは人ではなく版だから，である。たしかに。ということで，翻訳尺度の DIF 研究は近い手法として参照する。
+
+## 結果の要約 {#sec-summary}
+
+```{r}
+#| label: setup
+#| message: false
+#| warning: false
+#| echo: false
+pacman::p_load(tidyverse, knitr)
+
+# 部分不変性の計算結果(R/explore_partial_invariance.R で作成)
+pi_res <- readRDS("results/explore_partial_invariance.rds")
+# 対象項目の文面(調査票で実施した文面と照合済み)
+target_txt <- readr::read_csv("R/explore_target_items.csv", show_col_types = FALSE)
+
+# 表の表示に使う関数 --------------------------------------------------------
+# p 値: .001 未満は「<.001」，それ以外は小数点以下3桁で先頭の0を落とす
+fmt_p <- function(p) {
+  out <- dplyr::case_when(
+    is.na(p) ~ "-",
+    p < .001 ~ "<.001",
+    TRUE ~ sub("^0", "", sprintf("%.3f", p))
+  )
+  return(out)
+}
+# 数値: 指定の桁で丸め，NA は「-」(丸めて0になった負の値に「-0.000」と付かないよう，丸めてから0を足す)
+fmt_num <- function(x, digits = 2) {
+  out <- dplyr::if_else(is.na(x), "-", sprintf(paste0("%.", digits, "f"), round(x, digits) + 0))
+  return(out)
+}
+# 項目の表示名(例: PSTI 1)
+item_label <- function(abbr, item) {
+  return(paste(abbr, item))
+}
+
+# 自由にしたモデルの行だけを取り，推定法×回答順の調整ごとに18項目で Holm 補正する
+pi_free <- pi_res |>
+  dplyr::filter(model == "free") |>
+  dplyr::mutate(
+    delta_p_holm = stats::p.adjust(delta_p, method = "holm"),
+    order_item_p_holm = stats::p.adjust(order_item_p, method = "holm"),
+    .by = c(estimator, order_adjusted)
+  ) |>
+  dplyr::mutate(label = item_label(abbr, item))
+
+# 基準モデル(下位因子ごと)。回答順の調整なしでは同じ下位因子の対象項目で共通なので1行にする
+pi_base <- pi_res |>
+  dplyr::filter(model == "baseline", !order_adjusted) |>
+  dplyr::distinct(scale_id, abbr, factor, estimator, .keep_all = TRUE)
+```
+
+```{r}
+#| label: tbl-summary
+#| tbl-cap: "対象18項目の結果の要約。期待得点の差は AI版 − 人手版(元の得点の単位)。$p$値は18項目で Holmの補正をした値。回答順の調整は MIMIC(@sec-order)"
+#| echo: false
+# 推定法×回答順の調整を横に並べる
+pi_free |>
+  dplyr::mutate(
+    cond = paste0(estimator, dplyr::if_else(order_adjusted, "・順序調整", "")),
+    cell = paste0(fmt_num(exp_score_diff), " (", fmt_p(delta_p_holm), ")")
+  ) |>
+  dplyr::select(scale_id, item, label, factor, type, cond, cell) |>
+  tidyr::pivot_wider(names_from = cond, values_from = cell) |>
+  dplyr::arrange(scale_id, item) |>
+  dplyr::select(項目 = label, 下位因子 = factor, 種類 = type,
+                WLSMV, `WLSMV・順序調整`, MLR, `MLR・順序調整`) |>
+  knitr::kable(align = "lllcccc")
+```
+
+対象18項目のうち，版の間で得点の出方がはっきり違ったのは PSTI 1 であった。同じ特性の水準の人でも，AI版では人手版より平均して約1点(5件法)低く答えられていた。人手版の「どきどきしてしまう」に対し，AI版は原文の butterflies を「胃がムズムズする」と訳しており，日本語としてなじみの薄い身体感覚の表現が当てはまりにくかった可能性がある。
+
+これに次ぐのは SCSS 31(−0.36)，URP-IR 29 と PSTI 11(いずれも +0.29)，PSTI 6(+0.24)であった。このうち PSTI 1・SCSS 31・PSTI 11・URP-IR 29 の4項目は，順序扱い(WLSMV)でも連続扱い(MLR)でも，18項目で Holm 補正した後に基準モデルとの差が有意であった。PSTI 6 は WLSMV でのみ，FoMO 5(+0.18)は MLR でのみ有意であった。TCI 1(−0.22)も WLSMV では有意であったが，3項目しかない下位因子で他の項目に不適解が出ており，結果は安定していない(@sec-caution)。残る11項目は期待得点の差が ±0.11 以内に収まり，版の間で働きに目立った違いは見られなかった。
+
+差が有意であった項目でも，下位因子全体の当てはまりの変化(ΔCFI)はほとんどが .01 未満であった。違いは項目単位では検出できるものの，下位因子の測定の構造を損なうほどではない。また，先に答えた版を共変量に入れても，これらの結果はほとんど変わらなかった(@sec-order)。
+
+なお，AI版が人手版と同じ訳語を選んだ項目のうち，TCI 8 と PSTI 21 は予想どおり差が小さかった。訳の差が目立った項目でも，FoMO 7・9 の「モヤモヤする」と「気になる」のように，得点の出方には違いが表れなかったものが多い。
+
+## 準備
+
+### 対象項目
+
+- 確定は 10/22 14:00 版のスプレッドシート(6尺度18項目)。Discord で挙がった SCSS「30」は31，PSTI「5」は6 が正しい(採点キーの英文で照合)。
+- 実施した文面は調査票 PDF で照合した。人手版は xlsx の「人手翻訳(日本語)」列，AI版は「AI翻訳の調整」列。「人手翻訳の調整」列は実施されていない。
+- コメントの種類は計算の前に決めた。A=置き換え，B=通じるかの懸念(原語・カタカナに近い形を残した)，C=補足・意訳，D=訳語の選択。
+- 教示・事例の改変(URP-IR の事例，SCSS 教示の「欲求」)は項目単位の検討に乗らないので対象外とした。
+
+```{r}
+#| label: tbl-targets
+#| tbl-cap: "対象項目と実施した文面。「AI版の選択」は AI版が人手版と同じ選択をしたか"
+#| echo: false
+target_txt |>
+  dplyr::left_join(dplyr::distinct(pi_free, scale_id, item, factor), by = c("scale_id", "item")) |>
+  dplyr::mutate(label = item_label(abbr, item)) |>
+  dplyr::select(項目 = label, 下位因子 = factor, 種類 = type,
+                人手版 = text_human, AI版 = text_ai, `AI版の選択` = ai_choice) |>
+  knitr::kable()
+```
+
+### 方法のメモ {#sec-method}
+
+- 単位は対象項目が属する下位因子(11下位因子・75項目のうち対象18)。人手版・AI版の2因子とし，同じ項目の誤差相関を入れる。仮説2の測定不変性と同じ設定(WLSMV・delta 母数化・Wu & Estabrook, 2016 の識別)。
+- 基準モデルは閾値・負荷・切片をすべて両版で等値にしたもの。AI版の因子平均と因子分散は自由。
+  - 閾値と負荷だけを等値にした段では，AI版の各項目の切片が自由に残り，項目の位置のずれが基準の時点で吸収されて検出できないため，切片まで含めた。
+- 対象項目1つにつき1本，その項目の閾値と負荷を両版で自由にしたモデルを当て，基準と比べる(DIFFTEST の Δχ²，Δdf は閾値の数)。対象以外の項目はアンカーとして等値のまま。
+  - 閾値だけを自由にする比較も検討したが，semTools がその項目の尺度係数を1に固定するので基準と入れ子にならない。尺度係数を自由に残すと，閾値と負荷を自由にしたモデルと同じ当てはまりになる。
+  - 同じ下位因子の他の項目は自由にしない(比較の水準が増えて結果が読みにくくなるため)。
+- 片方の版にしか現れない選択肢は，仮説2と同じ規則で隣のカテゴリと併合した。
+- 効果量
+  - 閾値の差: 自由にしたモデルでの AI版 − 人手版の閾値の差の平均(潜在反応の SD 単位)。
+  - 期待得点の差: 同じ因子得点 η での各版の期待得点 E[Y | η] の差を，η ~ N(0, 1) で平均したもの(元の得点の単位)。
+- 感度分析
+  - MLR(連続扱い)。基準は負荷・切片の等値，対象項目の切片と負荷を自由にする(Δdf = 2)。
+  - 回答順の調整(MIMIC，@sec-order)。
+- delta 母数化では残差の等値は検討できない(theta 母数化が要る)。
+- p 値は参考とし，18項目で Holm 補正した値を示す。
+
+```{r}
+#| label: compute-code
+#| eval: false
+# (計算は R/explore_partial_invariance.R で行い，結果を rds に保存した。ここではコードの要点を示すだけ)
+# 下位因子ごとに，その下位因子の項目だけに絞った key と対象項目を渡す
+fit_partial_invariance(citizen_long, key_f, scale_id, items, estimator, order = ord)
+```
+
+## 結果(WLSMV) {#sec-wlsmv}
+
+```{r}
+#| label: tbl-wlsmv
+#| tbl-cap: "対象項目の閾値と負荷を自由にしたときの基準との差(WLSMV・回答順の調整なし)。負荷は自由にしたモデルでの人手版/AI版の標準化前の値。閾値の差と期待得点の差は AI版 − 人手版"
+#| echo: false
+pi_free |>
+  dplyr::filter(estimator == "WLSMV", !order_adjusted) |>
+  dplyr::arrange(scale_id, item) |>
+  dplyr::transmute(
+    項目 = label, 下位因子 = factor, 種類 = type,
+    `Δχ²(df)` = paste0(fmt_num(delta_chisq, 1), " (", delta_df, ")"),
+    p = fmt_p(delta_p), `p(Holm)` = fmt_p(delta_p_holm),
+    ΔCFI = fmt_num(delta_cfi, 3),
+    `負荷 人手/AI` = paste0(fmt_num(load_human), "/", fmt_num(load_ai)),
+    閾値の差 = fmt_num(thr_diff_mean),
+    期待得点の差 = fmt_num(exp_score_diff)
+  ) |>
+  knitr::kable(align = "lllrrrrcrr")
+```
+
+```{r}
+#| label: tbl-thr
+#| tbl-cap: "自由にしたモデルでの対象項目の閾値(人手版とAI版)"
+#| echo: false
+pi_free |>
+  dplyr::filter(estimator == "WLSMV", !order_adjusted) |>
+  dplyr::arrange(scale_id, item) |>
+  dplyr::select(項目 = label, 人手版 = thr_human, AI版 = thr_ai) |>
+  knitr::kable()
+```
+
+```{r}
+#| label: tbl-base
+#| tbl-cap: "基準モデル(閾値・負荷・切片の等値)の当てはまりと AI版の因子平均・因子分散(人手版は平均0・分散1)。WLSMV・回答順の調整なし"
+#| echo: false
+pi_base |>
+  dplyr::filter(estimator == "WLSMV") |>
+  dplyr::arrange(scale_id, factor) |>
+  dplyr::transmute(
+    尺度 = abbr, 下位因子 = factor, 項目数 = n_item, n,
+    `χ²(df)` = paste0(fmt_num(chisq, 1), " (", df, ")"),
+    CFI = fmt_num(cfi, 3), RMSEA = fmt_num(rmsea, 3), SRMR = fmt_num(srmr, 3),
+    `AI版の因子平均` = fmt_num(ai_factor_mean), `AI版の因子分散` = fmt_num(ai_factor_var)
+  ) |>
+  knitr::kable(align = "llrrrrrrrr")
+```
+
+<!-- 下書き(Claude)。小杉が推敲する -->
+
+基準モデルでは，AI版の因子平均を自由に推定している。SCSS Acceptance(−0.58)と URP-IR System Support(−0.30)では，AI版の因子平均が人手版より低かった。これは下位因子全体の水準が版で違うことを表しており，対象項目に固有の働きの違いとは区別して読む必要がある。
+
+## 感度分析
+
+### MLR {#sec-mlr}
+
+```{r}
+#| label: tbl-mlr
+#| tbl-cap: "対象項目の切片と負荷を自由にしたときの基準との差(MLR・回答順の調整なし)。切片の差は AI版 − 人手版を人手版の項目の SD で割ったもの"
+#| echo: false
+pi_free |>
+  dplyr::filter(estimator == "MLR", !order_adjusted) |>
+  dplyr::arrange(scale_id, item) |>
+  dplyr::transmute(
+    項目 = label, 下位因子 = factor,
+    # 差の検定が計算できなかった項目は「-」だけにする
+    `Δχ²(df)` = dplyr::if_else(is.na(delta_chisq), "-", paste0(fmt_num(delta_chisq, 1), " (", delta_df, ")")),
+    p = fmt_p(delta_p), `p(Holm)` = fmt_p(delta_p_holm),
+    ΔCFI = fmt_num(delta_cfi, 3),
+    `負荷 人手/AI` = paste0(fmt_num(load_human), "/", fmt_num(load_ai)),
+    切片の差 = fmt_num(int_diff_std),
+    期待得点の差 = fmt_num(exp_score_diff),
+    注 = note
+  ) |>
+  knitr::kable(align = "llrrrrcrrl")
+```
+
+<!-- 下書き(Claude)。小杉が推敲する -->
+
+連続扱いの MLR でも，結果は WLSMV とほぼ同じであった。期待得点の差は多くの項目で WLSMV と 0.05 以内で一致し，Holm 補正後に有意な項目の顔ぶれも，PSTI 6 と FoMO 5 が入れ替わったことと，TCI 1 の検定が計算できなかったことを除けば同じであった。TCI 1 は基準モデルに不適解(項目14の誤差分散が負)があり，スケーリングした差の検定が計算できなかった。
+
+### 回答順の調整(MIMIC) {#sec-order}
+
+- 先に答えた版(`trans_cond`)を x = +0.5(AI版が先)/−0.5(人手版が先)とし，共変量に入れた。
+- 因子への効果: 人手版の因子に g，AI版の因子に −g(後に答えた版が一律に g だけ動く，という制約)。
+- 対象項目への直接効果: 人手版の項目に p，AI版の項目に −p。p が項目ごとなので，基準モデルも項目ごとに当て直した。
+- `trans_cond` は long データに無いので，processed の CSV から「セット_行番号」の ID で付けた。
+- CFI は回答順なしのモデルと比べない(独立モデルが変わるため)。
+
+```{r}
+#| label: tbl-order
+#| tbl-cap: "回答順の調整の前後での比較(WLSMV)。項目特有の順序効果は，その項目を2回目に答えたときに1回目より高くなる向きを正とした値(潜在反応の SD 単位)。p は18項目で Holm 補正"
+#| echo: false
+pi_free |>
+  dplyr::filter(estimator == "WLSMV") |>
+  dplyr::select(scale_id, item, label, order_adjusted, delta_chisq, exp_score_diff, order_item, order_item_p_holm) |>
+  tidyr::pivot_wider(names_from = order_adjusted, values_from = c(delta_chisq, exp_score_diff, order_item, order_item_p_holm)) |>
+  dplyr::arrange(scale_id, item) |>
+  dplyr::transmute(
+    項目 = label,
+    `Δχ² 調整前` = fmt_num(delta_chisq_FALSE, 1), `Δχ² 調整後` = fmt_num(delta_chisq_TRUE, 1),
+    `期待得点の差 調整前` = fmt_num(exp_score_diff_FALSE), `期待得点の差 調整後` = fmt_num(exp_score_diff_TRUE),
+    `項目特有の順序効果` = fmt_num(order_item_TRUE),
+    `p(Holm)` = fmt_p(order_item_p_holm_TRUE)
+  ) |>
+  knitr::kable(align = "lrrrrrr")
+```
+
+```{r}
+#| label: tbl-order-factor
+#| tbl-cap: "因子への順序効果 g(2回目に答えた版の因子が1回目より高くなる向きを正とした値・因子の SD 単位。基準モデル。下位因子ごとに，対象項目ごとの当て直しで値がほぼ同じなので最初の対象項目の基準モデルの値を示す)"
+#| echo: false
+pi_res |>
+  dplyr::filter(model == "baseline", order_adjusted) |>
+  dplyr::arrange(scale_id, factor, item) |>
+  dplyr::distinct(scale_id, abbr, factor, estimator, .keep_all = TRUE) |>
+  dplyr::mutate(cell = dplyr::if_else(
+    is.na(order_factor), paste0("- ", note),
+    paste0(fmt_num(order_factor), " (SE ", fmt_num(order_factor_se), ", p ", fmt_p(order_factor_p), ")")
+  )) |>
+  dplyr::select(scale_id, 尺度 = abbr, 下位因子 = factor, estimator, cell) |>
+  tidyr::pivot_wider(names_from = estimator, values_from = cell) |>
+  dplyr::select(-scale_id) |>
+  knitr::kable()
+```
+
+<!-- 下書き(Claude)。小杉が推敲する -->
+
+回答順を調整しても，Δχ² と期待得点の差はほとんど変わらなかった。対象項目に固有の順序効果は，18項目すべてで Holm 補正後に有意でなかった。
+
+一方，下位因子全体にかかる順序効果は，いくつかの下位因子で見られた。IDAS-II Dysphoria では2回目に答えた版の因子が1回目より約0.13 SD 低く，SCSS Distraction と TCI Unhealthy use でも約0.08 SD 低かった。逆に SCSS Acceptance では2回目のほうが約0.2 SD 高かった。素点で見ると，IDAS-II 31 は回答順によって版の差の向きが入れ替わっていたが，これは項目に固有の効果ではなく，Dysphoria 全体が2回目に下がる効果でほぼ説明できる。
+
+このように順序効果はあるものの，主に下位因子全体にかかるものであり，回答順のカウンターバランスによっておおむね打ち消されている。そのため，対象項目の版の差の推定にはほとんど影響しなかった。なお，TCI Civic use の MLR では，回答順を入れると一部のモデルが収束しなかった。
+
+## 注意点 {#sec-caution}
+
+- アンカーの汚染: 同じ下位因子に働きの違う項目が他にあると，対象項目の差がずれる。
+- 3項目の下位因子(TCI Civic use は3項目中2項目が対象，URP-IR System Support)はアンカーが少なく不安定。TCI Civic use では項目14に不適解が出ている。
+- 働きの違いが検出されなくても，訳が同等だとは言えない(違いが回答の出方に表れなかっただけ)。
+- 片方の版にしかない選択肢を併合したので，その項目の閾値の比較は併合後のカテゴリでのもの。

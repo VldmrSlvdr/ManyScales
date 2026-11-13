@@ -1,0 +1,800 @@
+---
+title: "探索解析：専門家評価にて問題が指摘された項目の検討"
+date: today
+date-format: "YYYY-MM-DD"
+format:
+  html:
+    toc: true
+    toc-depth: 4
+    toc-location: left
+    number-sections: true
+    embed-resources: true
+    code-fold: show
+---
+
+## 目的
+
+専門家評価にて問題（意味の忠実さ、理解のしやすさ、文化的妥当性の問題）が指摘された項目について、AI翻訳と人手翻訳において差があるのかを検討する。また、翻訳者が訳すのに困難を感じた項目に絞って、AI翻訳と人手翻訳との間に同様の差があるのかを検討する。
+
+## 結果の要約 {#sec-summary}
+
+```{r}
+#| label: summary-compute
+#| echo: false
+#| message: false
+#| warning: false
+#| results: hide
+#| ref.label: [problem-setup, problem-data, problem-fit, problem-results, problem-fig-data]
+```
+
+### 翻訳方法(AIか人手)の影響
+
+オッズ比は「AI版 / 人手版」で，1より大きければ AI版の方が「問題あり」と指摘されやすい。p 値は翻訳方法の効果を除いたモデルとの尤度比検定，3観点（意味の忠実さ、理解のしやすさ、文化的妥当性の問題）あるのでHolm 補正を行う。
+
+```{r}
+#| label: tbl-summary
+#| tbl-cap: "版（AI版 vs 人手版）が「問題あり」の指摘に与える効果（一般化線形混合モデル）"
+#| echo: false
+problem_effects |>
+  transmute(
+    観点 = problem_aspect_labels[aspect],
+    `指摘率 人手版` = sprintf("%.1f%%", 100 * prop_human),
+    `指摘率 AI版` = sprintf("%.1f%%", 100 * prop_ai),
+    `オッズ比［95%CI］` = sprintf("%.2f [%.2f, %.2f]", or, or_lower, or_upper),
+    `χ²(1)` = sprintf("%.2f", lrt_chisq),
+    p = fmt_p(lrt_p),
+    `p（Holm）` = fmt_p(lrt_p_holm)
+  ) |>
+  knitr::kable()
+```
+
+```{r}
+#| label: fig-summary-prob
+#| echo: false
+#| fig-width: 8
+#| fig-height: 3.5
+#| fig-cap: "「問題あり」と指摘される確率のモデル推定値（専門家・項目の変量効果が0の場合，95%CI）。白丸は観測された指摘率。"
+fig_problem_prob
+```
+
+オッズ比は，同じ専門家・同じ項目の中での翻訳方法の違い（条件付きの効果）である。専門家間・項目間で版の効果がばらつくことは変量傾きとして認めているので，「どの項目でも同じ差がある」という意味ではない。
+
+### 翻訳者が訳すのに困難を感じた項目における翻訳方法の影響
+
+```{r}
+#| label: summary-compute-target
+#| echo: false
+#| message: false
+#| warning: false
+#| results: hide
+#| ref.label: [target-data, target-fit, target-results, target-interaction, target-fig-data]
+```
+
+翻訳者が訳す際に迷った18項目（`R/explore_target_items.csv`）に絞って，上と同じように AI版と人手版の指摘率を比べる。オッズ比・p 値・Holm 補正の意味は上の表と同じである。
+
+```{r}
+#| label: tbl-summary-target
+#| tbl-cap: "翻訳者が困難を感じた18項目における，翻訳方法（AI版 vs 人手版）が「問題あり」の指摘に与える効果"
+#| echo: false
+target_effects |>
+  transmute(
+    観点 = problem_aspect_labels[aspect],
+    `指摘数 人手版` = sprintf("%d / %d", n_checked_human, n_human),
+    `指摘数 AI版` = sprintf("%d / %d", n_checked_ai, n_ai),
+    `指摘率 人手版` = sprintf("%.1f%%", 100 * prop_human),
+    `指摘率 AI版` = sprintf("%.1f%%", 100 * prop_ai),
+    `オッズ比［95%CI］` = sprintf("%.2f [%.2f, %.2f]", or, or_lower, or_upper),
+    `χ²(1)` = sprintf("%.2f", lrt_chisq),
+    p = fmt_p(lrt_p),
+    `p（Holm）` = fmt_p(lrt_p_holm)
+  ) |>
+  knitr::kable()
+```
+
+```{r}
+#| label: fig-summary-target-prob
+#| echo: false
+#| fig-width: 8
+#| fig-height: 3.5
+#| fig-cap: "翻訳者が困難を感じた18項目で「問題あり」と指摘される確率のモデル推定値（専門家・項目の変量効果が0の場合，95%CI）。白丸は観測された指摘率。"
+fig_target_prob
+```
+
+参考として，版の差（オッズ比）が18項目とそれ以外の項目とで異なるかを，全項目のデータに「困難を感じた項目かどうか」と版の交互作用を入れたモデルで検定した。
+
+```{r}
+#| label: tbl-summary-interaction
+#| tbl-cap: "（参考）翻訳方法の差が18項目とそれ以外の項目とで異なるか（翻訳方法 × 困難を感じた項目の交互作用）"
+#| echo: false
+target_interaction |>
+  transmute(
+    観点 = problem_aspect_labels[aspect],
+    `オッズ比 18項目［95%CI］` = sprintf("%.2f [%.2f, %.2f]", or_target, or_target_lower, or_target_upper),
+    `オッズ比 それ以外［95%CI］` = sprintf("%.2f [%.2f, %.2f]", or_other, or_other_lower, or_other_upper),
+    `オッズ比の比［95%CI］` = sprintf("%.2f [%.2f, %.2f]", ratio, ratio_lower, ratio_upper),
+    `χ²(1)` = sprintf("%.2f", lrt_chisq),
+    p = fmt_p(lrt_p)
+  ) |>
+  knitr::kable()
+```
+
+- 18項目のデータは各観点612評定と少なく，「問題あり」の指摘も数件〜数十件しかない。このため，オッズ比の95%CI は全項目の解析よりかなり広い。
+- 各専門家は担当したセットに含まれる2〜5項目しか「問題あり」と評価していないので，専門家ごとの翻訳方法の変量傾きは推定できない。そこで，18項目の解析では専門家の変量効果を切片だけにした（@sec-target-method）。
+- 18項目は翻訳者の報告にもとづいて選んだ項目であり，無作為に選んだ項目ではない。18項目で差が見られても，それだけでは「18項目ではそれ以外の項目より AI版と人手版の差が大きい」とは言えない。
+
+## 解析
+
+### データ
+
+入力は `data/3_data_processed/ManyScales_専門家_problem_long.csv`（専門家 × 版 × 項目 × 観点につき1行）である。
+
+| 変数 | 内容 |
+|---|---|
+| `set` | 調査票のセット（A〜F） |
+| `subject_id` | 専門家 |
+| `scale_id` | 尺度ID（1〜22。MCS はセットC/D の両方で 10） |
+| `version` | `ai`：AI翻訳，`human`：人手翻訳 |
+| `item` | 尺度内の項目番号（尺度ごとに1から振られる） |
+| `aspect` | `semantic`：意味の忠実さ，`naturalness`：理解のしやすさ，`cultural_validity`：文化的妥当性 |
+| `checked` | 1：その観点で問題ありと評価，0：問題なし |
+
+- `item` は尺度ごとに1から振り直されているので，同じセットの中でも `set` と `item` だけでは項目が決まらない。そこで項目は **`scale_id` × `item`** で識別する（`item_id`）。MCS はセットC/D で同じ項目を評価しているので，両セットの評価を同じ項目としてまとめる（仮説1で MCS を1つの尺度として扱うのと同じ）。
+- 仮説1と同じく，TIVS（尺度ID 11，セットD）は解析から除外する。
+
+### モデル
+
+観点ごとに，`checked` を従属変数とするロジスティックの一般化線形混合モデル（`lme4::glmer`，`family = binomial`）を当てはめる。
+
+```r
+checked ~ x + (1 + x || subject_id) + (1 + x || item_id)
+# x: AI版 = +0.5，人手版 = −0.5
+```
+
+| モデルの項 | 意味 |
+|---|---|
+| `x` | AI版と人手版の差（対数オッズ）。exp(係数) が「AI版 / 人手版」のオッズ比。**判定に使う** |
+| `(1 + x \|\| subject_id)` | 専門家による違い（問題を指摘しやすい傾向，AI版をどれだけ多く指摘しやすいか） |
+| `(1 + x \|\| item_id)` | 項目による違い（問題を指摘されやすさ，版による差の大きさ） |
+
+- 各専門家は担当したセットのすべての項目について両版を評価しており，各項目は複数の専門家に評価されている。このため，観測は専門家と項目の両方にネストしている（専門家と項目は交差している）。
+- 版は専門家内・項目内の要因なので，変量切片に加えて版の変量傾きも入れる（Barr et al., 2013）。`||` は変量切片と変量傾きの相関を0と置く指定である（仮説1・3のモデルと同じ構造）。
+- 推定は最尤法（ラプラス近似）で，最適化には `bobyqa` を用いる。
+- 版の効果の検定は，`x` を除いたモデルとの尤度比検定で行う。3観点で Holm 補正した p 値も示す。オッズ比の95%CI は Wald 法による。
+- 推定確率は，専門家・項目の変量効果を0としたとき（典型的な専門家・項目）の値で，95%CI は固定効果の分散共分散行列から対数オッズの尺度で求めて確率に戻したものである。
+
+### 翻訳者が訳すのに困難を感じた項目の解析 {#sec-target-method}
+
+`R/explore_target_items.csv` の18項目（`scale_id` と `item` で特定。翻訳者が訳す際に迷った項目）のデータだけを取り出し，観点ごとに次のモデルを当てはめる。
+
+```r
+checked ~ x + (1 | subject_id) + (1 + x || item_id)
+```
+
+- 各専門家は担当したセットに含まれる2〜5項目しか評価していないので，専門家ごとの版の変量傾きはデータから推定できない（主解析と同じ構造で当てはめると，変量効果の SD が10を超えるなど推定が破綻する）。そこで専門家の変量効果は切片だけとし，項目の変量傾き（1項目あたり約17人が両版を評価）は残す。
+- 検定・オッズ比・推定確率の求め方と Holm 補正は主解析と同じである。
+- 参考として，全項目のデータに「困難を感じた項目かどうか」を表す `h`（18項目 = +0.5，それ以外 = −0.5）を加え，版との交互作用を検討する。
+
+```r
+checked ~ x * h + (1 + x || subject_id) + (1 + x || item_id)
+```
+
+  `x:h` の係数を exp したものが「18項目でのオッズ比 / それ以外の項目でのオッズ比」で，`x:h` を除いたモデルとの尤度比検定で検定する。`h` は項目間の変数なので，項目の変量効果には含めない。
+
+## 解析の実行
+
+### データの準備
+
+```{r}
+#| label: problem-setup
+#| eval: false
+library(tidyverse)
+library(lme4)
+
+problem_aspects <- c("semantic", "naturalness", "cultural_validity")
+problem_aspect_labels <- c(
+  semantic = "意味の忠実さ",
+  naturalness = "理解のしやすさ",
+  cultural_validity = "文化的妥当性"
+)
+problem_scale_names <- c(
+  "IDAS-II", "FOBS", "NARQ", "HEEMA", "BTPS", "rAOT-E",
+  "SCSS", "OCQ", "EHARS", "MCS", "TIVS", "MESx", "TCI",
+  "RMQ", "FoMO", "MPS", "MOS", "MEMI", "PSTI", "VAST",
+  "URP-IR", "GAAIS-10"
+)
+# 解析から除外する尺度（仮説1と同じ）。尺度IDは元の1〜22のまま残す。
+excluded_scales <- c(TIVS = 11L)
+
+problem_control <- glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5))
+
+# p 値の表示：.001 未満は「<.001」，それ以外は小数点以下3桁で先頭の0を落とす
+fmt_p <- function(p) {
+  dplyr::case_when(
+    is.na(p) ~ "-",
+    p < .001 ~ "<.001",
+    TRUE ~ sub("^0", "", sprintf("%.3f", p))
+  )
+}
+
+# 1つの観点のデータに主解析モデルを当てはめる
+problem_fit <- function(d, random_slopes = TRUE) {
+  f <- if (random_slopes) {
+    checked ~ x + (1 + x || subject_id) + (1 + x || item_id)
+  } else {
+    checked ~ x + (1 | subject_id) + (1 | item_id)
+  }
+  glmer(f, data = d, family = binomial, control = problem_control)
+}
+
+# 翻訳方法の効果（オッズ比・尤度比検定・推定確率）を1行にまとめる
+problem_effect <- function(fit) {
+  fit0 <- update(fit, . ~ . - x)
+  lrt <- anova(fit0, fit)
+  # tibble() は先に作った列を後の式から参照するので，列名と同じ名前の変数は使わない
+  b <- fixef(fit)[["x"]]
+  V <- as.matrix(vcov(fit))
+  b_se <- sqrt(V["x", "x"])
+  # 推定確率：人手版 = b0 − 0.5 b1，AI版 = b0 + 0.5 b1（対数オッズ）
+  L <- rbind(human = c(1, -0.5), ai = c(1, 0.5))
+  eta <- drop(L %*% fixef(fit))
+  eta_se <- sqrt(diag(L %*% V %*% t(L)))
+  z <- qnorm(.975)
+  tibble(
+    log_or = b, se = b_se,
+    or = exp(b), or_lower = exp(b - z * b_se), or_upper = exp(b + z * b_se),
+    wald_p = 2 * pnorm(-abs(b / b_se)),
+    lrt_chisq = lrt$Chisq[2], lrt_p = lrt$`Pr(>Chisq)`[2],
+    p_human = plogis(eta[["human"]]),
+    p_human_lower = plogis(eta[["human"]] - z * eta_se[["human"]]),
+    p_human_upper = plogis(eta[["human"]] + z * eta_se[["human"]]),
+    p_ai = plogis(eta[["ai"]]),
+    p_ai_lower = plogis(eta[["ai"]] - z * eta_se[["ai"]]),
+    p_ai_upper = plogis(eta[["ai"]] + z * eta_se[["ai"]])
+  )
+}
+
+# 収束の確認：特異（分散が0に張り付く）かどうかと，lme4 の収束に関する警告
+problem_diag <- function(fit) {
+  msgs <- fit@optinfo$conv$lme4$messages
+  tibble(singular = isSingular(fit),
+         converged = is.null(msgs),
+         message = if (is.null(msgs)) "" else paste(msgs, collapse = " / "))
+}
+
+# 変量効果の SD を横長にまとめる
+problem_re_sd <- function(fit) {
+  as.data.frame(VarCorr(fit)) |>
+    transmute(term = paste0(sub("\\.1$", "", grp), "：", ifelse(var1 == "x", "版の傾き", "切片")),
+              sd = sdcor)
+}
+```
+
+### 解析環境
+
+```{r}
+#| label: session-info
+sessionInfo()
+```
+
+### データの整理
+
+
+
+```{r}
+#| label: problem-data
+#| eval: false
+# (このチャンクは冒頭の「結果の要約」で ref.label により実行済み。ここではコードを示すだけ)
+raw_problem <- read_csv("data/3_data_processed/ManyScales_専門家_problem_long.csv",
+                        show_col_types = FALSE)
+stopifnot(
+  all(raw_problem$version %in% c("ai", "human")),
+  all(raw_problem$aspect %in% problem_aspects),
+  all(raw_problem$checked %in% c(0, 1))
+)
+
+problem_prepare <- function(raw, excluded = excluded_scales) {
+  raw |>
+    filter(!scale_id %in% excluded) |>
+    mutate(
+      x = ifelse(version == "ai", 0.5, -0.5),           # 係数は AI − 人手
+      item_id = factor(sprintf("%02d_%03d", scale_id, item)),  # 尺度 × 尺度内の項目番号
+      subject_id = factor(subject_id),
+      scale_label = sprintf("%02d %s", scale_id, problem_scale_names[scale_id])
+    )
+}
+d_problem <- problem_prepare(raw_problem)
+
+# 観点・版ごとの指摘数と指摘率（記述統計）
+problem_desc <- d_problem |>
+  group_by(aspect, version) |>
+  summarise(n = n(), n_checked = sum(checked), prop = mean(checked), .groups = "drop")
+```
+
+```{r}
+#| label: problem-data-check
+# 1人の専門家が同じ項目・観点に両版を1回ずつ評価しているか
+d_problem |>
+  count(subject_id, item_id, aspect, version) |>
+  count(n, name = "組み合わせの数")
+# 解析に使うデータの大きさ
+d_problem |>
+  group_by(aspect) |>
+  summarise(評定数 = n(), 専門家数 = n_distinct(subject_id),
+            項目数 = n_distinct(item_id), 尺度数 = n_distinct(scale_id))
+```
+
+### 記述統計
+
+```{r}
+#| label: tbl-descriptive
+#| tbl-cap: "観点・版ごとの「問題あり」の指摘数と指摘率"
+problem_desc |>
+  arrange(factor(aspect, levels = problem_aspects), desc(version)) |>
+  mutate(観点 = problem_aspect_labels[aspect],
+         版 = ifelse(version == "ai", "AI版", "人手版"),
+         指摘率 = sprintf("%.2f%%", 100 * prop)) |>
+  select(観点, 版, 評定数 = n, 指摘数 = n_checked, 指摘率) |>
+  knitr::kable()
+```
+
+専門家ごとの指摘率を両版で比べる。対角線より上の点は，AI版の方を多く指摘した専門家である。
+
+```{r}
+#| label: fig-subject-props
+#| fig-width: 10
+#| fig-height: 3.8
+#| fig-cap: "専門家ごとの「問題あり」の指摘率（人手版 vs AI版）。点は1人の専門家，破線は両版が等しい線。"
+d_problem |>
+  group_by(aspect, subject_id, version) |>
+  summarise(prop = mean(checked), .groups = "drop") |>
+  pivot_wider(names_from = version, values_from = prop) |>
+  mutate(aspect_label = factor(problem_aspect_labels[aspect], levels = problem_aspect_labels)) |>
+  ggplot(aes(human, ai)) +
+  geom_abline(linetype = 2, colour = "grey50") +
+  geom_point(alpha = 0.5, colour = "#0072B2") +
+  facet_wrap(~ aspect_label, nrow = 1) +
+  coord_equal() +
+  scale_x_continuous(labels = scales::percent) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = "人手版の指摘率", y = "AI版の指摘率") +
+  theme_minimal(base_size = 11) +
+  theme(panel.grid.minor = element_blank())
+```
+
+尺度ごとの指摘率の差（AI版 − 人手版）を示す。
+
+```{r}
+#| label: fig-scale-diff
+#| fig-width: 10
+#| fig-height: 6
+#| fig-cap: "尺度ごとの「問題あり」の指摘率の差（AI版 − 人手版，記述統計）。正なら AI版の方が多く指摘された。"
+d_problem |>
+  group_by(aspect, scale_label, version) |>
+  summarise(prop = mean(checked), .groups = "drop") |>
+  pivot_wider(names_from = version, values_from = prop) |>
+  mutate(diff = ai - human,
+         aspect_label = factor(problem_aspect_labels[aspect], levels = problem_aspect_labels),
+         scale_label = fct_rev(factor(scale_label))) |>
+  ggplot(aes(diff, scale_label, fill = diff > 0)) +
+  geom_col() +
+  geom_vline(xintercept = 0, colour = "grey40") +
+  facet_wrap(~ aspect_label, nrow = 1) +
+  scale_x_continuous(labels = function(x) sprintf("%+.0f%%", 100 * x)) +
+  scale_fill_manual(values = c(`TRUE` = "#D55E00", `FALSE` = "#0072B2"),
+                    labels = c(`TRUE` = "AI版の方が多い", `FALSE` = "人手版の方が多い"),
+                    name = NULL) +
+  labs(x = "指摘率の差（AI版 − 人手版）", y = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom", panel.grid.minor = element_blank())
+```
+
+### モデルの推定と診断
+
+```{r}
+#| label: problem-fit
+#| eval: false
+# (このチャンクは冒頭の「結果の要約」で ref.label により実行済み。ここではコードを示すだけ)
+fits_problem <- setNames(lapply(problem_aspects, function(a) {
+  problem_fit(filter(d_problem, aspect == a))
+}), problem_aspects)
+```
+
+`singular = FALSE`（分散が0に張り付いていない）かつ `converged = TRUE`（lme4 の収束警告がない）であればよい。
+
+```{r}
+#| label: tbl-diag
+#| tbl-cap: "主解析モデルの収束の確認"
+bind_rows(lapply(fits_problem, problem_diag), .id = "aspect") |>
+  mutate(観点 = problem_aspect_labels[aspect], .before = 1) |>
+  select(-aspect) |>
+  knitr::kable()
+```
+
+```{r}
+#| label: tbl-re
+#| tbl-cap: "変量効果の SD（対数オッズ）"
+bind_rows(lapply(fits_problem, problem_re_sd), .id = "aspect") |>
+  mutate(観点 = problem_aspect_labels[aspect]) |>
+  select(観点, term, sd) |>
+  pivot_wider(names_from = 観点, values_from = sd) |>
+  knitr::kable(digits = 2)
+```
+
+各モデルの要約：
+
+```{r}
+#| label: problem-summary-print
+for (a in problem_aspects) {
+  cat("\n====", problem_aspect_labels[[a]], "====\n")
+  print(summary(fits_problem[[a]]))
+}
+```
+
+### 翻訳方法の効果
+
+```{r}
+#| label: problem-results
+#| eval: false
+# (このチャンクは冒頭の「結果の要約」で ref.label により実行済み。ここではコードを示すだけ)
+problem_effects <- bind_rows(lapply(fits_problem, problem_effect), .id = "aspect") |>
+  mutate(lrt_p_holm = p.adjust(lrt_p, method = "holm")) |>
+  left_join(problem_desc |>
+              select(aspect, version, prop) |>
+              pivot_wider(names_from = version, values_from = prop, names_prefix = "prop_"),
+            by = "aspect")
+```
+
+```{r}
+#| label: tbl-effects
+#| tbl-cap: "翻訳方法の効果の詳細（対数オッズの係数，Wald 検定と尤度比検定，推定確率）"
+problem_effects |>
+  transmute(
+    観点 = problem_aspect_labels[aspect],
+    `係数（AI − 人手）` = log_or, SE = se,
+    `Wald p` = fmt_p(wald_p), `LRT p` = fmt_p(lrt_p), `LRT p（Holm）` = fmt_p(lrt_p_holm),
+    `推定確率 人手版［95%CI］` = sprintf("%.2f%% [%.2f, %.2f]", 100 * p_human,
+                                  100 * p_human_lower, 100 * p_human_upper),
+    `推定確率 AI版［95%CI］` = sprintf("%.2f%% [%.2f, %.2f]", 100 * p_ai,
+                                 100 * p_ai_lower, 100 * p_ai_upper)
+  ) |>
+  knitr::kable(digits = 3)
+```
+
+推定確率は典型的な専門家・項目（変量効果 = 0）についての値である。指摘の多い専門家・項目が全体の指摘率を押し上げるので，観測された指摘率より低くなる。
+
+### 結論の図の作成
+
+```{r}
+#| label: problem-fig-data
+#| eval: false
+# (このチャンクは冒頭の「結果の要約」で ref.label により実行済み。ここではコードを示すだけ)
+problem_prob_long <- bind_rows(
+  problem_effects |> transmute(aspect, version = "人手版", est = p_human,
+                               lower = p_human_lower, upper = p_human_upper, obs = prop_human),
+  problem_effects |> transmute(aspect, version = "AI版", est = p_ai,
+                               lower = p_ai_lower, upper = p_ai_upper, obs = prop_ai)
+) |>
+  mutate(aspect_label = factor(problem_aspect_labels[aspect], levels = problem_aspect_labels),
+         version = factor(version, levels = c("人手版", "AI版")))
+fig_problem_prob <- ggplot(problem_prob_long, aes(version, est, colour = version)) +
+  geom_pointrange(aes(ymin = lower, ymax = upper)) +
+  geom_point(aes(y = obs), shape = 21, fill = "white", size = 2.2) +
+  geom_text(data = problem_effects |>
+              mutate(aspect_label = factor(problem_aspect_labels[aspect],
+                                           levels = problem_aspect_labels)),
+            aes(x = 1.5, y = Inf, label = sprintf("OR = %.2f\np = %s", or, fmt_p(lrt_p))),
+            inherit.aes = FALSE, vjust = 1.2, size = 3.3) +
+  facet_wrap(~ aspect_label, nrow = 1) +
+  scale_y_continuous(labels = scales::percent, expand = expansion(mult = c(0.05, 0.35))) +
+  scale_colour_manual(values = c("人手版" = "#D55E00", "AI版" = "#0072B2"), guide = "none") +
+  labs(x = NULL, y = "「問題あり」と指摘される確率") +
+  theme_minimal(base_size = 11) +
+  theme(panel.grid.minor = element_blank())
+```
+
+### 感度分析 {#sec-sensitivity}
+
+変量効果を切片だけにしたモデルでもオッズ比を求め，主解析と比べる。
+
+```{r}
+#| label: problem-sensitivity
+problem_sens <- bind_rows(
+  主解析 = problem_effects |> select(aspect, or, or_lower, or_upper, lrt_p),
+  `変量切片のみ` = bind_rows(lapply(problem_aspects, function(a) {
+    problem_effect(problem_fit(filter(d_problem, aspect == a), random_slopes = FALSE))
+  }) |> setNames(problem_aspects), .id = "aspect"),
+  .id = "model"
+)
+```
+
+```{r}
+#| label: fig-sensitivity
+#| fig-width: 9
+#| fig-height: 2.4
+#| fig-cap: "モデルの設定を変えたときのオッズ比（AI版 / 人手版，95%CI，対数軸）。"
+problem_sens |>
+  mutate(model = factor(model, levels = rev(c("主解析", "変量切片のみ"))),
+         aspect_label = factor(problem_aspect_labels[aspect], levels = problem_aspect_labels)) |>
+  ggplot(aes(or, model, xmin = or_lower, xmax = or_upper)) +
+  geom_vline(xintercept = 1, linetype = 2) +
+  geom_pointrange(aes(colour = model == "主解析"), size = 0.3) +
+  facet_wrap(~ aspect_label, nrow = 1) +
+  scale_x_log10() +
+  scale_colour_manual(values = c(`TRUE` = "black", `FALSE` = "grey45"), guide = "none") +
+  labs(x = "オッズ比（AI版 / 人手版，右ほど AI版の方が指摘されやすい）", y = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(panel.grid.minor = element_blank())
+```
+
+```{r}
+#| label: tbl-sensitivity
+#| tbl-cap: "モデルの設定を変えたときのオッズ比と尤度比検定の p 値"
+problem_sens |>
+  transmute(model, 観点 = problem_aspect_labels[aspect],
+            `オッズ比［95%CI］` = sprintf("%.2f [%.2f, %.2f]", or, or_lower, or_upper),
+            p = fmt_p(lrt_p)) |>
+  knitr::kable()
+```
+
+### 翻訳者が訳すのに困難を感じた項目に絞った解析 {#sec-target}
+
+#### データの整理
+
+```{r}
+#| label: target-data
+#| eval: false
+# (このチャンクは冒頭の「結果の要約」で ref.label により実行済み。ここではコードを示すだけ)
+target_items <- read_csv("R/explore_target_items.csv", show_col_types = FALSE) |>
+  mutate(item_id = sprintf("%02d_%03d", scale_id, item))
+stopifnot(
+  nrow(target_items) == 18,
+  !anyDuplicated(target_items$item_id),
+  all(target_items$item_id %in% levels(d_problem$item_id))  # TIVS の項目は含まれない
+)
+d_target <- d_problem |>
+  filter(item_id %in% target_items$item_id) |>
+  droplevels()
+
+# 観点・版ごとの指摘数と指摘率（記述統計）
+target_desc <- d_target |>
+  group_by(aspect, version) |>
+  summarise(n = n(), n_checked = sum(checked), prop = mean(checked), .groups = "drop")
+```
+
+```{r}
+#| label: target-data-check
+d_target |>
+  group_by(aspect) |>
+  summarise(評定数 = n(), 専門家数 = n_distinct(subject_id), 項目数 = n_distinct(item_id))
+# 1人の専門家が評価した18項目の数
+d_target |>
+  distinct(subject_id, item_id) |>
+  count(subject_id, name = "項目数") |>
+  count(項目数, name = "専門家数")
+```
+
+#### 記述統計
+
+```{r}
+#| label: tbl-target-items
+#| tbl-cap: "翻訳者が困難を感じた18項目の訳文"
+target_items |>
+  transmute(尺度 = abbr, 項目 = item, 人手版 = text_human, AI版 = text_ai) |>
+  knitr::kable()
+```
+
+```{r}
+#| label: tbl-target-item-counts
+#| tbl-cap: "18項目ごとの「問題あり」の指摘数（人手版 / AI版）"
+d_target |>
+  group_by(item_id, aspect, version) |>
+  summarise(k = sum(checked), n = n(), .groups = "drop") |>
+  pivot_wider(names_from = version, values_from = k) |>
+  mutate(value = sprintf("%d / %d", human, ai),
+         aspect = problem_aspect_labels[aspect]) |>
+  select(item_id, 評価者数 = n, aspect, value) |>
+  pivot_wider(names_from = aspect, values_from = value) |>
+  left_join(target_items |> select(item_id, 尺度 = abbr, 項目 = item), by = "item_id") |>
+  arrange(item_id) |>
+  select(尺度, 項目, 評価者数, all_of(unname(problem_aspect_labels))) |>
+  knitr::kable()
+```
+
+#### モデルの推定と診断
+
+```{r}
+#| label: target-fit
+#| eval: false
+# (このチャンクは冒頭の「結果の要約」で ref.label により実行済み。ここではコードを示すだけ)
+# 18項目のモデル。専門家ごとの版の変量傾きは推定できないので入れない（@sec-target-method）
+target_fit <- function(d, item_slope = TRUE) {
+  f <- if (item_slope) {
+    checked ~ x + (1 | subject_id) + (1 + x || item_id)
+  } else {
+    checked ~ x + (1 | subject_id) + (1 | item_id)
+  }
+  glmer(f, data = d, family = binomial, control = problem_control)
+}
+fits_target <- setNames(lapply(problem_aspects, function(a) {
+  target_fit(filter(d_target, aspect == a))
+}), problem_aspects)
+```
+
+```{r}
+#| label: tbl-target-diag
+#| tbl-cap: "18項目のモデルの収束の確認"
+bind_rows(lapply(fits_target, problem_diag), .id = "aspect") |>
+  mutate(観点 = problem_aspect_labels[aspect], .before = 1) |>
+  select(-aspect) |>
+  knitr::kable()
+```
+
+```{r}
+#| label: tbl-target-re
+#| tbl-cap: "18項目のモデルの変量効果の SD（対数オッズ）"
+bind_rows(lapply(fits_target, problem_re_sd), .id = "aspect") |>
+  mutate(観点 = problem_aspect_labels[aspect]) |>
+  select(観点, term, sd) |>
+  pivot_wider(names_from = 観点, values_from = sd) |>
+  knitr::kable(digits = 2)
+```
+
+`singular = TRUE` の観点は，項目の変量傾きの SD が0と推定されたことを表す。このとき固定効果の推定値は，項目の変量傾きを除いたモデル（下の感度分析の「変量切片のみ」）と同じになる。
+
+```{r}
+#| label: target-summary-print
+for (a in problem_aspects) {
+  cat("\n====", problem_aspect_labels[[a]], "====\n")
+  print(summary(fits_target[[a]]))
+}
+```
+
+#### 翻訳方法の効果
+
+```{r}
+#| label: target-results
+#| eval: false
+# (このチャンクは冒頭の「結果の要約」で ref.label により実行済み。ここではコードを示すだけ)
+target_effects <- bind_rows(lapply(fits_target, problem_effect), .id = "aspect") |>
+  mutate(lrt_p_holm = p.adjust(lrt_p, method = "holm")) |>
+  left_join(target_desc |>
+              select(aspect, version, n, n_checked, prop) |>
+              pivot_wider(names_from = version, values_from = c(n, n_checked, prop)),
+            by = "aspect")
+```
+
+```{r}
+#| label: tbl-target-effects
+#| tbl-cap: "18項目における翻訳方法の効果の詳細（対数オッズの係数，Wald 検定と尤度比検定，推定確率）"
+target_effects |>
+  transmute(
+    観点 = problem_aspect_labels[aspect],
+    `係数（AI − 人手）` = log_or, SE = se,
+    `Wald p` = fmt_p(wald_p), `LRT p` = fmt_p(lrt_p), `LRT p（Holm）` = fmt_p(lrt_p_holm),
+    `推定確率 人手版［95%CI］` = sprintf("%.2f%% [%.2f, %.2f]", 100 * p_human,
+                                  100 * p_human_lower, 100 * p_human_upper),
+    `推定確率 AI版［95%CI］` = sprintf("%.2f%% [%.2f, %.2f]", 100 * p_ai,
+                                 100 * p_ai_lower, 100 * p_ai_upper)
+  ) |>
+  knitr::kable(digits = 3)
+```
+
+#### （参考）翻訳方法 × 困難を感じた項目の交互作用
+
+```{r}
+#| label: target-interaction
+#| eval: false
+# (このチャンクは冒頭の「結果の要約」で ref.label により実行済み。ここではコードを示すだけ)
+# h: 翻訳者が困難を感じた18項目 = +0.5，それ以外 = −0.5
+d_problem_h <- d_problem |>
+  mutate(h = ifelse(item_id %in% target_items$item_id, 0.5, -0.5))
+interaction_fit <- function(d) {
+  glmer(checked ~ x * h + (1 + x || subject_id) + (1 + x || item_id),
+        data = d, family = binomial, control = problem_control)
+}
+fits_interaction <- setNames(lapply(problem_aspects, function(a) {
+  interaction_fit(filter(d_problem_h, aspect == a))
+}), problem_aspects)
+
+# 交互作用の検定と，18項目・それ以外の項目それぞれでの版のオッズ比
+interaction_effect <- function(fit) {
+  fit0 <- update(fit, . ~ . - x:h)
+  lrt <- anova(fit0, fit)
+  V <- as.matrix(vcov(fit))
+  # 対数オッズ比：18項目 = b_x + 0.5 b_xh，それ以外 = b_x − 0.5 b_xh，比 = b_xh
+  L <- rbind(target = c(0, 1, 0, 0.5), other = c(0, 1, 0, -0.5), ratio = c(0, 0, 0, 1))
+  colnames(L) <- c("(Intercept)", "x", "h", "x:h")
+  L <- L[, names(fixef(fit))]
+  est <- drop(L %*% fixef(fit))
+  est_se <- sqrt(diag(L %*% V %*% t(L)))
+  z <- qnorm(.975)
+  tibble(
+    or_target = exp(est[["target"]]),
+    or_target_lower = exp(est[["target"]] - z * est_se[["target"]]),
+    or_target_upper = exp(est[["target"]] + z * est_se[["target"]]),
+    or_other = exp(est[["other"]]),
+    or_other_lower = exp(est[["other"]] - z * est_se[["other"]]),
+    or_other_upper = exp(est[["other"]] + z * est_se[["other"]]),
+    ratio = exp(est[["ratio"]]),
+    ratio_lower = exp(est[["ratio"]] - z * est_se[["ratio"]]),
+    ratio_upper = exp(est[["ratio"]] + z * est_se[["ratio"]]),
+    lrt_chisq = lrt$Chisq[2], lrt_p = lrt$`Pr(>Chisq)`[2]
+  )
+}
+target_interaction <- bind_rows(lapply(fits_interaction, interaction_effect), .id = "aspect")
+```
+
+```{r}
+#| label: tbl-interaction-diag
+#| tbl-cap: "交互作用モデルの収束の確認"
+bind_rows(lapply(fits_interaction, problem_diag), .id = "aspect") |>
+  mutate(観点 = problem_aspect_labels[aspect], .before = 1) |>
+  select(-aspect) |>
+  knitr::kable()
+```
+
+#### 結論の図の作成
+
+```{r}
+#| label: target-fig-data
+#| eval: false
+# (このチャンクは冒頭の「結果の要約」で ref.label により実行済み。ここではコードを示すだけ)
+target_prob_long <- bind_rows(
+  target_effects |> transmute(aspect, version = "人手版", est = p_human,
+                              lower = p_human_lower, upper = p_human_upper, obs = prop_human),
+  target_effects |> transmute(aspect, version = "AI版", est = p_ai,
+                              lower = p_ai_lower, upper = p_ai_upper, obs = prop_ai)
+) |>
+  mutate(aspect_label = factor(problem_aspect_labels[aspect], levels = problem_aspect_labels),
+         version = factor(version, levels = c("人手版", "AI版")))
+fig_target_prob <- ggplot(target_prob_long, aes(version, est, colour = version)) +
+  geom_pointrange(aes(ymin = lower, ymax = upper)) +
+  geom_point(aes(y = obs), shape = 21, fill = "white", size = 2.2) +
+  geom_text(data = target_effects |>
+              mutate(aspect_label = factor(problem_aspect_labels[aspect],
+                                           levels = problem_aspect_labels)),
+            aes(x = 1.5, y = Inf, label = sprintf("OR = %.2f\np = %s", or, fmt_p(lrt_p))),
+            inherit.aes = FALSE, vjust = 1.2, size = 3.3) +
+  facet_wrap(~ aspect_label, nrow = 1) +
+  scale_y_continuous(labels = scales::percent, expand = expansion(mult = c(0.05, 0.35))) +
+  scale_colour_manual(values = c("人手版" = "#D55E00", "AI版" = "#0072B2"), guide = "none") +
+  labs(x = NULL, y = "「問題あり」と指摘される確率") +
+  theme_minimal(base_size = 11) +
+  theme(panel.grid.minor = element_blank())
+```
+
+#### 感度分析
+
+項目の変量傾きも除いたモデル（変量切片のみ）でもオッズ比を求め，比べる。
+
+```{r}
+#| label: tbl-target-sensitivity
+#| tbl-cap: "18項目の解析で，モデルの設定を変えたときのオッズ比と尤度比検定の p 値"
+target_sens <- bind_rows(
+  `18項目の解析` = target_effects |> select(aspect, or, or_lower, or_upper, lrt_p),
+  `変量切片のみ` = bind_rows(lapply(problem_aspects, function(a) {
+    problem_effect(target_fit(filter(d_target, aspect == a), item_slope = FALSE))
+  }) |> setNames(problem_aspects), .id = "aspect"),
+  .id = "model"
+)
+target_sens |>
+  transmute(model, 観点 = problem_aspect_labels[aspect],
+            `オッズ比［95%CI］` = sprintf("%.2f [%.2f, %.2f]", or, or_lower, or_upper),
+            p = fmt_p(lrt_p)) |>
+  knitr::kable()
+```
+
+### 結果の保存
+
+```{r}
+#| label: problem-save
+dir.create("results/explore_problem", recursive = TRUE, showWarnings = FALSE)
+saveRDS(list(effects = problem_effects, descriptive = problem_desc,
+             sensitivity = problem_sens, fits = fits_problem,
+             target = list(items = target_items, effects = target_effects,
+                           descriptive = target_desc, sensitivity = target_sens,
+                           interaction = target_interaction, fits = fits_target,
+                           fits_interaction = fits_interaction)),
+        "results/explore_problem/problem_items_glmm.rds")
+capture.output(sessionInfo(), file = "results/explore_problem/sessionInfo.txt")
+```

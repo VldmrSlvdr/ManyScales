@@ -1,0 +1,441 @@
+---
+title: "ManyScales 調査1 分析フラグ付与 ※除外基準3なし"
+date: "`r Sys.Date()`"
+output:
+ html_document:
+  md_extensions: -ascii_identifiers
+  toc: true
+  toc_depth: 4
+  toc_float: true
+  number_section: true
+---
+
+```{r paths, include=FALSE}
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+```
+
+
+## 目的
+
+このファイルは，Qualtricsからダウンロードした調査1のTSVに，分析対象にできるかどうかを示す `analysis_target` と，除外基準に関するフラグを追加します。
+
+入力ファイルは `2026_ManyScales_一般_2026年7月29日_06.39.tsv` です。
+出力ファイルは `ManyScales_一般_analysis_flags.tsv` です。
+元のTSVは上書きしません。
+
+## 判定の概要
+
+`analysis_target` は，割り当てられたセットの通常尺度項目にすべて回答している場合に `1` とします。
+
+C/Dセットに含まれる10MCSは，男性だけに表示される項目です。
+そのため，C/Dセットの10MCS項目は `mcs_gender == "male"` の行だけ完答判定に含めます。
+女性やその他の回答者は，10MCSが空欄でもそれだけでは未完答にしません。
+
+除外基準として適用するフラグは次の2つです。
+
+- `excl1`: 注意チェック質問または視覚的認知トラップ質問に誤答している，または無回答である。
+- `excl2`: `analysis_target == 1` のケースで算出した尺度別の平均値−3標準偏差より，尺度の合計回答時間が短い。
+
+```{r}
+suppressPackageStartupMessages(suppressWarnings(library(tidyverse)))
+
+input_file <- "2026_ManyScales_一般_2026年7月29日_06.39.tsv"
+output_file <- "ManyScales_一般_analysis_flags_除外基準3なし.tsv"
+```
+
+## データの読み込み
+
+QualtricsのTSVはUTF-16LEで保存されています。
+最初の2行は質問文行とImportId行なので，分析対象の回答行からは除きます。
+
+```{r}
+data <- read_tsv(
+  input_file,
+  locale = locale(encoding = "UTF-16LE"),
+  col_types = cols(.default = col_character()),
+  na = c("", "NA"),
+  show_col_types = FALSE
+) |>
+  slice(-(1:2)) |>
+  mutate(row_id = row_number())
+
+item_columns <- str_subset(
+  names(data),
+  "^[A-F][0-9]{2}_item[0-9]+_(human|ai)$"
+)
+```
+
+## 分析対象フラグ
+
+割り当てられたセットの通常尺度項目だけを完答判定に使います。
+DQS，タイマー，明瞭性評価，翻訳比較質問，同意後の確認質問はここでは見ません。
+
+```{r}
+completion <- data |>
+  select(row_id, set_id, mcs_gender, all_of(item_columns)) |>
+  pivot_longer(all_of(item_columns), names_to = "column", values_to = "value") |>
+  filter(
+    set_id == str_sub(column, 1, 1),
+    !(set_id %in% c("C", "D") & str_sub(column, 2, 3) == "10" & coalesce(mcs_gender != "male", TRUE))
+  ) |>
+  summarise(
+    analysis_target = as.integer(all(!is.na(value) & str_trim(value) != "")),
+    .by = row_id
+  )
+
+data <- data |>
+  left_join(completion, by = "row_id") |>
+  mutate(analysis_target = replace_na(analysis_target, 0L))
+```
+
+## 除外基準1: 注意チェックと視覚的認知トラップ
+
+`dqs01_check`，`dqs02_check`，`dqs03_check`，`ai-trap_check` は，正答が `0`，誤答が `1` です。
+4問のうち1問でも誤答または無回答であれば `excl1 = 1` とし，4問すべてに回答して正答した場合だけ `excl1 = 0` とします。
+
+```{r}
+check_columns <- c("dqs01_check", "dqs02_check", "dqs03_check", "ai-trap_check")
+
+data <- data |>
+  mutate(
+    # 無回答も誤答として扱う。4列すべてが正答コード "0" の場合だけ excl1 = 0 とする。
+    excl1 = as.integer(
+      if_any(
+        all_of(check_columns),
+        ~ is.na(.x) | str_trim(.x) != "0"
+      )
+    )
+  )
+```
+
+## 除外基準2: 尺度別回答時間
+
+各尺度について，人手翻訳版とAI翻訳版の主尺度ページ滞在時間を合計します。
+尺度ごとの平均値と標準偏差は，`analysis_target == 1` のケースだけを用いて算出します。
+その合計時間が，尺度ごとの平均値−3標準偏差より短ければ `excl2` に該当します。
+`analysis_target == 0` のケースはこの判定の対象外とし，`excl2 = 0` とします。
+
+```{r}
+timer_columns <- str_subset(names(data), "^[A-F][0-9]{2}_timer_(human|ai)$")
+
+excl2_by_scale <- data |>
+  # 完答して分析対象にできるケースだけで尺度別の基準値を算出し，excl2を判定する。
+  filter(analysis_target == 1L) |>
+  select(row_id, all_of(timer_columns)) |>
+  pivot_longer(all_of(timer_columns), names_to = "column", values_to = "value") |>
+  mutate(
+    value = as.numeric(value),
+    scale_id = str_sub(column, 2, 3),
+    condition = str_extract(column, "(human|ai)$")
+  ) |>
+  summarise(
+    time = if_else(all(is.na(value)), NA_real_, sum(value, na.rm = TRUE)),
+    .by = c(row_id, scale_id, condition)
+  ) |>
+  pivot_wider(names_from = condition, values_from = time) |>
+  mutate(total_time = human + ai) |>
+  mutate(
+    cutoff = mean(total_time, na.rm = TRUE) - 3 * sd(total_time, na.rm = TRUE),
+    excl2_scale = !is.na(total_time) & total_time < cutoff,
+    .by = scale_id
+  )
+
+excl2_summary <- excl2_by_scale |>
+  summarise(
+    n = sum(!is.na(total_time)),
+    mean_seconds = round(mean(total_time, na.rm = TRUE) / 1000, 3),
+    sd_seconds = round(sd(total_time, na.rm = TRUE) / 1000, 3),
+    m_minus_3sd_seconds = round(first(cutoff) / 1000, 3),
+    .by = scale_id
+  ) |>
+  arrange(scale_id)
+
+data <- data |>
+  left_join(
+    excl2_by_scale |>
+      summarise(excl2 = as.integer(any(excl2_scale, na.rm = TRUE)), .by = row_id),
+    by = "row_id"
+  ) |>
+  # analysis_target == 0 のケースは判定対象外なので，結合後の欠損を 0 にする。
+  mutate(excl2 = replace_na(excl2, 0L))
+```
+
+## 参考フラグ: 同一回答の連続（除外には適用しない）
+
+通常尺度項目を，尺度・翻訳条件ごとに項目番号順で並べます。
+同じ回答が `ceiling(min(10, 0.8 * 項目数))` 以上連続しているかを参考情報として記録しますが，分析対象からの除外には適用しません。
+
+```{r}
+excl3_by_scale <- data |>
+  select(row_id, all_of(item_columns)) |>
+  pivot_longer(all_of(item_columns), names_to = "column", values_to = "value") |>
+  mutate(
+    value = na_if(str_trim(value), ""),
+    scale_prefix = str_extract(column, "^[A-F][0-9]{2}"),
+    scale_id = str_sub(scale_prefix, 2, 3),
+    condition = str_extract(column, "(human|ai)$"),
+    item = parse_number(str_extract(column, "item[0-9]+"))
+  ) |>
+  arrange(row_id, scale_prefix, condition, item) |>
+  summarise(
+    longest_run = {
+      runs <- rle(value)
+      max(c(0L, runs$lengths[!is.na(runs$values)]))
+    },
+    n_items = n(),
+    .by = c(row_id, scale_prefix, scale_id, condition)
+  ) |>
+  mutate(excl3_scale = longest_run >= ceiling(pmin(10, 0.8 * n_items)))
+
+excl3_hits <- excl3_by_scale |>
+  filter(excl3_scale)
+
+data <- data |>
+  left_join(
+    excl3_hits |>
+      summarise(
+        excl3human = as.integer(any(condition == "human")),
+        excl3ai = as.integer(any(condition == "ai")),
+        excl3 = as.integer(excl3human == 1 | excl3ai == 1),
+        .by = row_id
+      ),
+    by = "row_id"
+  ) |>
+  mutate(across(c(excl3, excl3human, excl3ai), ~ replace_na(.x, 0L)))
+```
+
+## excl3の尺度別集計
+
+`excl3_summary` では，基準に該当した回答者を尺度，翻訳条件，最大連続回答数ごとに数えます。
+同じ回答者は，同じ尺度・同じ翻訳条件の中では1回だけ数えます。
+
+```{r}
+excl3_summary <- excl3_hits |>
+  count(scale_id, condition, longest_run, name = "n_people") |>
+  arrange(scale_id, condition, longest_run)
+
+excl3_summary_text <- excl3_summary |>
+  summarise(
+    summary = str_c(
+      first(scale_id),
+      " ",
+      str_pad(first(condition), width = 5, side = "right"),
+      " ",
+      sum(n_people),
+      "人（",
+      str_c(longest_run, "回：", n_people, "人", collapse = "；"),
+      "）"
+    ),
+    .by = c(scale_id, condition)
+  ) |>
+  arrange(scale_id, condition)
+```
+## 尺度別のexcl3フラグ
+
+`excl01human`，`excl01ai` のように，尺度番号と翻訳条件ごとのフラグも追加します。
+`excl3where` には，該当した尺度と条件をまとめて記録します。
+
+```{r}
+for (scale_id in sort(unique(excl3_by_scale$scale_id))) {
+  for (condition in c("human", "ai")) {
+    rows <- excl3_hits$row_id[excl3_hits$scale_id == scale_id & excl3_hits$condition == condition]
+    data[[str_c("excl", scale_id, condition)]] <- as.integer(data$row_id %in% rows)
+  }
+}
+
+excl3where <- excl3_hits |>
+  distinct(row_id, scale_id, condition) |>
+  arrange(row_id, scale_id, condition) |>
+  summarise(excl3where = str_c(str_c(scale_id, "_", condition), collapse = "；"), .by = row_id)
+
+data <- data |>
+  left_join(excl3where, by = "row_id") |>
+  mutate(excl3where = replace_na(excl3where, "")) |>
+  select(-row_id)
+```
+
+## 出力
+
+フラグを追加したTSVを書き出します。
+その後，確認用の集計だけを表示します。
+
+```{r}
+write_tsv(data, output_file, na = "")
+
+analysis_target_summary <- bind_rows(
+  count(data, analysis_target) |> mutate(set_id = "total", .before = 1),
+  count(data, set_id, analysis_target)
+)
+
+flag_summary <- data |>
+  summarise(across(c(analysis_target, excl1, excl2), sum))
+
+print(analysis_target_summary)
+print(flag_summary)
+print(excl2_summary, n = Inf)
+```
+
+## 回答時間の集計
+
+Qualtricsの `Duration (in seconds)` を用い，次の4群について回答時間の平均値，標準偏差，最小値，最大値を秒単位で集計します。
+
+- `analysis_target == 1` のケース
+- `analysis_target == 1` かつ `excl1`・`excl2` がともに `0` のケース
+- 回答日が2026-07-07で，`analysis_target == 1` のケース
+- 回答日が2026-07-07で，`analysis_target == 1` かつ `excl1`・`excl2` がともに `0` のケース
+
+集計結果はファイルには書き出さず，画面に表示します。`n` は回答時間が欠損していないケース数です。
+
+```{r}
+duration_column <- "Duration (in seconds)"
+
+if (!duration_column %in% names(data)) {
+  stop("回答時間の列 `Duration (in seconds)` が見つかりません。")
+}
+
+response_time_data <- data |>
+  mutate(
+    response_time_seconds = parse_double(.data[[duration_column]]),
+    response_date = as.Date(str_sub(RecordedDate, 1, 10))
+  )
+
+summarise_response_time <- function(df, target) {
+  df |>
+    summarise(
+      target = target,
+      n = sum(!is.na(response_time_seconds)),
+      mean_seconds = if (n > 0) mean(response_time_seconds, na.rm = TRUE) else NA_real_,
+      sd_seconds = if (n > 1) sd(response_time_seconds, na.rm = TRUE) else NA_real_,
+      min_seconds = if (n > 0) min(response_time_seconds, na.rm = TRUE) else NA_real_,
+      max_seconds = if (n > 0) max(response_time_seconds, na.rm = TRUE) else NA_real_
+    ) |>
+    mutate(across(ends_with("_seconds"), ~ round(.x, 3)))
+}
+
+response_time_summary <- bind_rows(
+  response_time_data |>
+    filter(analysis_target == 1L) |>
+    summarise_response_time("analysis_target == 1"),
+  response_time_data |>
+    filter(
+      analysis_target == 1L,
+      if_all(c(excl1, excl2), ~ .x == 0L)
+    ) |>
+    summarise_response_time("analysis_target == 1，excl1・excl2 == 0"),
+  response_time_data |>
+    filter(
+      response_date == as.Date("2026-07-07"),
+      analysis_target == 1L
+    ) |>
+    summarise_response_time("2026-07-07，analysis_target == 1"),
+  response_time_data |>
+    filter(
+      response_date == as.Date("2026-07-07"),
+      analysis_target == 1L,
+      if_all(c(excl1, excl2), ~ .x == 0L)
+    ) |>
+    summarise_response_time("2026-07-07，analysis_target == 1，excl1・excl2 == 0")
+)
+
+print(as.data.frame(response_time_summary), row.names = FALSE)
+```
+
+## `analysis_target == 1`のケース数の日付・set_id別集計
+
+`RecordedDate`の日付部分を用い，`analysis_target == 1`のケース数を，日付と`set_id`（A～F）の組み合わせごとに集計します。
+この表は，`excl1`・`excl2`を適用する前の完答ケースの割当数を示します。
+集計結果はファイルには書き出さず，画面に表示します。
+
+```{r}
+all_dates <- data |>
+  transmute(日付 = as.Date(str_sub(RecordedDate, 1, 10))) |>
+  filter(!is.na(日付)) |>
+  distinct(日付) |>
+  arrange(日付) |>
+  pull(日付)
+
+all_sets <- data |>
+  filter(!is.na(set_id), set_id != "") |>
+  distinct(set_id) |>
+  arrange(set_id) |>
+  pull(set_id)
+
+# analysis_target == 1 のケース数を，日付×set_idで集計する。
+analysis_target_daily_summary <- data |>
+  mutate(日付 = as.Date(str_sub(RecordedDate, 1, 10))) |>
+  filter(
+    !is.na(日付),
+    !is.na(set_id),
+    set_id != "",
+    analysis_target == 1L
+  ) |>
+  count(日付, set_id, name = "n") |>
+  complete(
+    日付 = all_dates,
+    set_id = all_sets,
+    fill = list(n = 0L)
+  ) |>
+  pivot_wider(
+    names_from = set_id,
+    values_from = n,
+    values_fill = 0L
+  ) |>
+  arrange(日付) |>
+  mutate(合計 = rowSums(across(all_of(all_sets))))
+
+analysis_target_daily_summary <- bind_rows(
+  analysis_target_daily_summary |>
+    mutate(日付 = as.character(日付)),
+  analysis_target_daily_summary |>
+    summarise(
+      日付 = "合計",
+      across(all_of(c(all_sets, "合計")), sum)
+    )
+)
+
+print(analysis_target_daily_summary, n = Inf, width = Inf)
+```
+
+## 除外基準適用後のケース数の日付・set_id別集計
+
+`analysis_target == 1`かつ`excl1`・`excl2`がともに`0`のケース数を，日付と`set_id`の組み合わせごとに集計します。
+除外後のケースが0件の日付も表示します。
+集計結果はファイルには書き出さず，画面に表示します。
+
+```{r}
+analysis_case_summary <- data |>
+  mutate(日付 = as.Date(str_sub(RecordedDate, 1, 10))) |>
+  filter(
+    !is.na(日付),
+    !is.na(set_id),
+    set_id != "",
+    analysis_target == 1L,
+    if_all(c(excl1, excl2), ~ .x == 0L)
+  ) |>
+  count(日付, set_id, name = "n") |>
+  complete(
+    日付 = all_dates,
+    set_id = all_sets,
+    fill = list(n = 0L)
+  ) |>
+  pivot_wider(
+    names_from = set_id,
+    values_from = n,
+    values_fill = 0L
+  ) |>
+  arrange(日付) |>
+  mutate(合計 = rowSums(across(all_of(all_sets))))
+
+analysis_case_summary <- bind_rows(
+  analysis_case_summary |>
+    mutate(日付 = as.character(日付)),
+  analysis_case_summary |>
+    summarise(
+      日付 = "合計",
+      across(all_of(c(all_sets, "合計")), sum)
+    )
+)
+
+print(analysis_case_summary, n = Inf, width = Inf)
+```
+

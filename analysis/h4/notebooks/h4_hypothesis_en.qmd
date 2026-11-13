@@ -1,0 +1,412 @@
+---
+title: "Hypothesis 4"
+date: today
+date-format: "YYYY-MM-DD"
+format:
+  html:
+    toc: true
+    toc-depth: 4
+    toc-location: left
+    number-sections: true
+    embed-resources: true
+---
+
+The Japanese file `h4_hypothesis_ja.qmd` uses the same section numbers. This notebook follows the pathway in the current reports and the slides. Axis labels are in English.
+
+```{r}
+#| include: false
+published <- function(name) file.path(getwd(), "..", "data", "published", name)
+```
+
+::: {.callout-important}
+## Cultural-validity interpretation corrected
+
+The exported cultural-validity rating is already reverse-coded: **higher scores mean better cultural validity**. H4 uses that score directly. The refitted human-minus-LLM similarity-slope difference is **+0.739 [0.032, 1.445]**: the similarity–quality association is more positive for the human version. Both version-specific slope intervals include zero, so this does not establish higher overall cultural validity for human translations. The separate cultural-problem checkboxes retain their 0/1 coding.
+
+The OCQ-only exclusion is retained: **363 → 330** eligible OCQ respondents; their other scales remain included. Overall citizen N remains 1,859.
+:::
+
+## Purpose
+
+Hypothesis 4 asks whether the English back-translation of a human Japanese item stays closer to the original English than the English back-translation of the LLM Japanese. Closer means a larger cosine from the frozen MPNet instrument. The preregistered direction is positive, the inequality
+
+$$\mathrm{Similarity}(\mathrm{Origin},\mathrm{Back\text{-}translation}_H) > \mathrm{Similarity}(\mathrm{Origin},\mathrm{Back\text{-}translation}_L).$$
+
+Participants read the Japanese. The test scores the English that comes back. That route was fixed before the result, so both sides stay in one language.
+
+The exploratory questions are separate. They do not rewrite the confirmatory decision.
+
+1. Is a translation that is closer to the original rated more highly?
+2. Do the human and LLM versions have different similarity–rating slopes?
+3. Do the two versions' own similarities predict preference or detection of the LLM column?
+4. Does a translation's own similarity predict whether experts flag a problem?
+
+## Data
+
+The data and study materials are managed through the [OSF project](https://osf.io/hn4fr/); the analysis-data upload is pending. GitHub contains no datasets. This notebook reads locally attached tables under `analysis/h4/data/published/` and does not recompute the embeddings.
+
+```{r}
+#| message: false
+#| warning: false
+library(readr)
+gaps <- read_csv(published("mpnet_item_delta.csv"), show_col_types = FALSE)
+boot <- read_csv(published("bootstrap_primary.csv"), show_col_types = FALSE)
+spec <- read_csv(published("specification_curve_primary.csv"), show_col_types = FALSE)
+beta <- read_csv(published("beta_density_primary.csv"), show_col_types = FALSE)
+slopes <- read_csv(published("judgment_slopes.csv"), show_col_types = FALSE)
+gap_analysis <- read_csv(published("gap_models_n1859.csv"), show_col_types = FALSE)
+screen <- read_csv(published("survey_screen_n1859.csv"), show_col_types = FALSE)
+interactions_analysis <- read_csv(published("similarity_interactions_n1859.csv"), show_col_types = FALSE)
+raw_ratings <- read_csv(published("raw_rating_ordinal_n1859.csv"), show_col_types = FALSE)
+raw_choices <- read_csv(published("raw_choice_logit_n1859.csv"), show_col_types = FALSE)
+raw_flags <- read_csv(published("raw_flag_logit_n1859.csv"), show_col_types = FALSE)
+wass <- read_csv(published("wasserstein_comparison.csv"), show_col_types = FALSE)
+gaps$scale_id <- sprintf("%02d", as.integer(gaps$scale_id))
+c(
+  item_rows = nrow(gaps),
+  specifications = nrow(spec),
+  analysis_citizens = screen$n_respondents[screen$cut == "citizen_two_rule"],
+  sensitivity_citizens = screen$n_respondents[screen$cut == "citizen_three_rule"]
+)
+```
+
+## Pathway
+
+The order is the one on the preprocessing slides and in the current primary analysis.
+
+1. Keep scale items. Instructions and response labels stay in the catalog and out of this average.
+2. Preprocessing removes scale 11, TIVS, 22 items. The table goes from 508 items in 22 scales to 486 items in 21 scales. The reason is the flag on the original English. The removed rows stay in the fit that puts TIVS back.
+3. The frozen instrument turns each sentence into a vector. The confirmatory instrument is `paraphrase-multilingual-mpnet-base-v2`. The model is not chosen after the result.
+4. Similarity is cosine. $\mathbf{a}$ is the original and $\mathbf{b}$ is a back-translation.
+
+$$\cos(\mathbf{a},\mathbf{b})=\frac{\mathbf{a}\cdot\mathbf{b}}{\lVert\mathbf{a}\rVert\,\lVert\mathbf{b}\rVert}$$
+
+5. The item gap subtracts the LLM back-translation cosine from the human back-translation cosine. Positive would mean the human back-translation is closer.
+6. The reported number is the REML intercept of that gap, with a scale random intercept.
+7. The sign checks are the scale bootstrap, the beta regression, MiniLM, LaBSE, and E5. Direct Japanese is a reference. It is not the locked test.
+8. The citizen analysis sample for respondent-based exploration is 1,859 people: assigned items complete, attention passed, and speeding passed. Straight-lining is omitted because presented order was not stored. The 1,211-person three-rule screen is the sensitivity sample. Within set C, code 6 on chocolate frequency excludes only OCQ responses: 363 → 330 in the main sample and 198 → 192 in the sensitivity sample; other scales from those people remain included. Experts remain 106.
+9. Exploratory models keep the observed outcome. The 1–5 ratings are ordinal outcomes; checkbox marks, preference, and the guess are binary outcomes. Each translation is paired with its own cosine to the original. Human-minus-LLM rating and flag differences are not dependent variables.
+
+## Summary of the results
+
+### Decision table
+
+Only the confirmatory row decides Hypothesis 4. Exploratory intervals do not change that decision.
+
+| Check | Human − LLM | 95% interval | Role |
+| --- | ---: | --- | --- |
+| REML, TIVS removed | −0.041 | [−0.060, −0.022] | Confirmatory. The interval excludes 0 |
+| Scale bootstrap, 10,000 draws | −0.038 | [−0.059, −0.025] | The same comparison. No positive draw |
+| Beta regression | −0.042 | [−0.061, −0.021] | The same comparison |
+| MiniLM | −0.055 | [−0.077, −0.033] | Instrument check |
+| LaBSE | −0.071 | [−0.106, −0.036] | Instrument check |
+| E5 | −0.006 | [−0.009, −0.004] | Instrument check. Closest to 0, still negative |
+| 22 scales, TIVS put back | −0.040 | [−0.058, −0.022] | Appendix robustness |
+
+On the 486 items, mean cosine is 0.896 for the human back-translation and 0.934 for the LLM back-translation. The confirmatory quote is −0.041 [−0.060, −0.022], not the equal-item mean of −0.038.
+
+The current exploratory models follow the co-author H1/H3 construction: one row per observed version, translation coded $x=+0.5$ for human and $-0.5$ for LLM, respondent- and scale-specific translation effects, and a respondent–scale pair intercept. Ratings use a cumulative-logit mixed model. The 0/1 preference, identification, and checkbox outcomes use binomial-logit mixed models with respondent, scale, item, and pair random effects as permitted by their observational structure. Similarity is that version's scale-mean back-translation cosine, standardized across both versions.
+
+| Raw ordinal rating | Human-text slope | LLM-text slope | Human − LLM slope |
+| --- | ---: | ---: | ---: |
+| Citizen naturalness | −0.137 [−0.361, 0.087] | −0.034 [−0.537, 0.469] | −0.103 [−0.575, 0.369] |
+| Expert naturalness | +0.293 [−0.015, 0.600] | −0.382 [−1.099, 0.336] | +0.674 [−0.059, 1.408] |
+| Expert semantic fidelity | +0.057 [−0.234, 0.348] | −0.216 [−0.944, 0.513] | +0.273 [−0.497, 1.043] |
+| Expert cultural validity | +0.194 [−0.097, 0.486] | −0.544 [−1.198, 0.110] | +0.739 [0.032, 1.445] |
+| Expert choice fit | **+0.348 [0.115, 0.580]** | +0.013 [−0.539, 0.566] | +0.334 [−0.255, 0.924] |
+
+The exploratory rating results include two distinct findings:
+
+- **Expert choice fit is positively associated with human-text similarity:** +0.348 [0.115, 0.580]. This is a simple similarity slope within the human version. The human-minus-LLM slope difference, +0.334 [−0.255, 0.924], includes zero, so the analysis does not establish a stronger association for human than LLM translations.
+- **Expert cultural validity has a positive human-minus-LLM similarity-slope difference:** +0.739 [0.032, 1.445]. The outcome is already scored higher = better cultural validity; neither version-specific simple slope excludes zero.
+
+ Citizen naturalness has no separated similarity slope. Preference and LLM identification also use their observed binary outcomes and enter human and LLM similarity separately; all citizen similarity intervals include zero.
+
+### Figures for the conclusion
+
+![21 scales after TIVS removal: cosine gaps and 95% confidence intervals. Back-translation on the left; direct Japanese on the right; overall estimate in the final row.](../figures/mean_item_gap_ja_ci.png)
+
+![Checkbox rates on the shared similarity](../figures/flag_by_similarity.png)
+
+![Raw ordinal ratings and raw binary outcomes against each translation's own similarity. Black intervals exclude zero](../figures/raw_outcome_models_n1859.png)
+
+### Conclusion
+
+Under the locked test, the LLM English back-translation is closer to the original English. The gap is about 0.04. The preregistered direction was the opposite. The bootstrap, the beta regression, the other three embeddings, and the 22-scale fit that puts TIVS back share that sign.
+
+The exploratory analysis no longer uses human-minus-LLM rating or flag differences as outcomes. On the raw ordinal ratings, the human-versus-LLM similarity-slope difference excludes zero only for expert cultural validity. Cultural ratings are already scored higher = better validity. The positive interaction indicates a more positive similarity–quality association for the human version; both cultural-validity simple-slope intervals include zero, and it does not establish higher overall cultural validity for human translations. **For expert choice fit, higher human-text similarity is associated with higher ratings (+0.348 [0.115, 0.580]).** This positive simple slope is a separate exploratory finding. Its difference from the LLM slope includes zero, so a version difference in that association is not established. Citizen naturalness, preference, and identification of the LLM column have similarity intervals that include zero.
+
+On raw expert flags, greater own similarity predicts fewer semantic flags for both versions, but more understandability flags for both versions. Cultural flags rise with LLM-text similarity; the human slope and the human-versus-LLM slope difference include zero. These are exploratory associations, not the confirmatory H4 decision.
+
+## Decision rule
+
+The confirmatory target is the REML intercept.
+
+| 95% interval | Confirmatory decision |
+| --- | --- |
+| Lower limit > 0 | Supports the prediction. The human back-translation is closer |
+| Upper limit < 0 | Opposite the prediction. The LLM back-translation is closer |
+| Includes 0 | The prediction is not supported |
+
+This report does not use a Bayes factor. The interval is the REML Wald interval. The bootstrap is the scale-then-item mean of the same difference. It does not replace the intercept. An exploratory interval that includes zero is not the Hypothesis 4 decision.
+
+## Method
+
+For item $i$ in scale $s$,
+
+$$\Delta_{is}=\cos(E_i,H^{\mathrm{back}}_i)-\cos(E_i,L^{\mathrm{back}}_i)$$
+
+$$\Delta_{is}=\mu+u_s+\varepsilon_{is}$$
+
+Here $i$ indexes items; $s$ indexes scales; $E_i$ is the original English item; $H_i^{\mathrm{back}}$ and $L_i^{\mathrm{back}}$ are the English back-translations of the human and LLM Japanese versions; and $\cos(\cdot,\cdot)$ is cosine similarity. $\Delta_{is}$ is the item-level human-minus-LLM gap, $\mu$ is its population mean across the 21 scales, $u_s$ is a scale random intercept with mean 0 and variance $\sigma_u^2$, and $\varepsilon_{is}$ is an item residual with mean 0 and variance $\sigma_\varepsilon^2$. The confirmatory estimate is $\mu$, fitted by REML.
+
+The exploratory rating data have one row per respondent, scale, and translation. Let $x=+0.5$ for the human version and $x=-0.5$ for the LLM version, and let $z_{sv}$ be that version's own scale-mean similarity to the original, standardized across both versions. The cumulative-logit mixed model is
+
+$$\operatorname{logit}\Pr(Y_{psv}\leq k)=\theta_k-\left[\beta_xx_v+\beta_zz_{sv}+\beta_{xz}x_vz_{sv}+\beta_oo_p+b_p+b_{px}x_v+b_s+b_{sx}x_v+b_{ps}\right].$$
+
+Every symbol is defined below.
+
+| Symbol | Definition |
+| --- | --- |
+| $p,s,v$ | Respondent, scale, and translation version; $v$ is human or LLM |
+| $Y_{psv}$ | Observed 1–5 rating by respondent $p$ for version $v$ of scale $s$ |
+| $k$ | Cumulative category boundary; $k=1,2,3,4$ for a five-category response |
+| $\Pr(Y_{psv}\leq k)$ | Probability that the observed rating is at or below category $k$ |
+| $\operatorname{logit}(q)$ | $\log\{q/(1-q)\}$ |
+| $\theta_k$ | The $k$th ordered threshold, with $\theta_1<\theta_2<\theta_3<\theta_4$ |
+| $x_v$ | Effect-coded version: human $+0.5$, LLM $-0.5$ |
+| $z_{sv}$ | Version $v$'s mean back-translation cosine for scale $s$, standardized over the 42 scale-version values (21 scales × 2 versions) |
+| $o_p$ | 1 if respondent $p$ received the LLM version first, otherwise 0 |
+| $\beta_x$ | Average human-minus-LLM version effect when similarity is at its mean |
+| $\beta_z$ | Similarity slope averaged over the two versions |
+| $\beta_{xz}$ | Human similarity slope minus LLM similarity slope |
+| $\beta_o$ | Fixed LLM-first versus human-first difference |
+| $b_p,b_s$ | Respondent and scale random intercepts |
+| $b_{px},b_{sx}$ | Respondent- and scale-specific deviations in the version effect |
+| $b_{ps}$ | Respondent × scale pair intercept shared by the two version ratings |
+
+Each random effect is assumed normally distributed with mean 0. Intercepts and version slopes enter as separate random terms, so their correlations are not estimated. Because the equation is written as “threshold minus linear predictor,” a positive coefficient increases the odds of choosing a higher category. The human similarity slope is $\beta_z+0.5\beta_{xz}$ and the LLM slope is $\beta_z-0.5\beta_{xz}$. This follows the paired structure of the co-author H1/H3 reports, but uses a Laplace cumulative-link mixed model rather than Bayesian estimation.
+
+Preference and the guess are one binary decision per respondent and scale, fitted with a binomial-logit mixed model:
+
+$$\operatorname{logit}\Pr(C_{ps}=1)=\alpha_0+\alpha_Hz_{sH}+\alpha_Lz_{sL}+\alpha_oo_p+a_p+a_s.$$
+
+For preference, $C_{ps}=1$ means choosing the human version; for the identification model, it means correctly naming the LLM version. $\alpha_0$ is the reference log-odds; $z_{sH}$ and $z_{sL}$ are the human and LLM scale similarities; $\alpha_H$ and $\alpha_L$ are their slopes; $\alpha_o$ is the order effect; and $a_p,a_s$ are mean-zero respondent and scale random intercepts.
+
+Expert flags retain each observed 0/1 mark and are fitted with a binomial-logit mixed model:
+
+$$\operatorname{logit}\Pr(F_{psiv}=1)=\gamma_0+\gamma_xx_v+\gamma_zz_{isv}+\gamma_{xz}x_vz_{isv}+\gamma_oo_p+c_p+c_{px}x_v+c_s+c_{sx}x_v+c_i+c_{pi}.$$
+
+$F_{psiv}=1$ means that respondent $p$ flagged item $i$ of scale $s$ in version $v$. $z_{isv}$ is that translation's own item-level cosine, standardized over the 972 item-version values (486 items × 2 versions). $\gamma_0$ is the reference log-odds; $\gamma_x$ is the average version effect; $\gamma_z$ is the similarity slope averaged over versions; $\gamma_{xz}$ is the human-minus-LLM similarity-slope difference; and $\gamma_o$ is the order effect. $c_p,c_s,c_i$ are mean-zero respondent, scale, and item random intercepts; $c_{px},c_{sx}$ are respondent- and scale-specific version effects; and $c_{pi}$ is the respondent × item pair intercept. Semantic, understandability, and cultural flags are fitted separately.
+
+**Coding correction (2026-10-31):** although the cultural-validity statement mentions unfamiliar expressions, Qualtrics has already reversed its exported codes: 5 = strongly disagree, 1 = strongly agree. Higher stored scores therefore mean fewer unfamiliar expressions and better cultural validity. H4 uses these exported scores without another reversal. The separate cultural-problem checkboxes remain 0/1 problem indicators.
+
+## Execution
+
+### Inputs
+
+```{r}
+back <- gaps[gaps$comparison == "back_translation", ]
+primary <- back[back$in_primary, ]
+stopifnot(nrow(back) == 508L)
+stopifnot(nrow(primary) == 486L)
+stopifnot(length(unique(primary$scale_id)) == 21L)
+stopifnot(!any(primary$scale_id == "11"))
+c(
+  items_before = nrow(back),
+  items_after = nrow(primary),
+  removed = nrow(back) - nrow(primary),
+  scales = length(unique(primary$scale_id)),
+  human = mean(primary$human),
+  llm = mean(primary$llm),
+  item_mean = mean(primary$delta)
+)
+```
+
+On the 486 items after TIVS is removed, mean cosine is about 0.896 for the human back-translation and about 0.934 for the LLM back-translation. A positive item gap would mean the human back-translation is closer.
+
+### Confirmatory estimate
+
+```{r}
+library(lme4)
+fit <- lmer(delta ~ 1 + (1 | scale_id), data = primary, REML = TRUE)
+est <- fixef(fit)[[1]]
+se <- sqrt(vcov(fit)[1, 1])
+ci <- est + c(-1.96, 1.96) * se
+stopifnot(abs(est - (-0.041283224127389495)) < 1e-4)
+c(estimate = est, se = se, low = ci[1], high = ci[2])
+```
+
+The quoted result is −0.041 (SE 0.010), interval [−0.060, −0.022]. The upper limit is below zero.
+
+The 508-item fit that puts TIVS back is the appendix check.
+
+```{r}
+fit_22 <- lmer(delta ~ 1 + (1 | scale_id), data = back, REML = TRUE)
+est_22 <- fixef(fit_22)[[1]]
+se_22 <- sqrt(vcov(fit_22)[1, 1])
+ci_22 <- est_22 + c(-1.96, 1.96) * se_22
+stopifnot(abs(est_22 - (-0.04004756)) < 1e-3)
+c(estimate = est_22, se = se_22, low = ci_22[1], high = ci_22[2])
+```
+
+The sign is the same. This −0.040 is not the confirmatory quote.
+
+### Figure by scale
+
+```{r}
+#| fig-width: 9.05
+#| fig-height: 6.69
+#| message: false
+#| warning: false
+source(file.path(getwd(), "..", "scripts", "plot_mean_item_gap_ja.R"))
+mean_gap_ja <- build_mean_item_gap_ja(file.path(getwd(), ".."), save = FALSE)
+mean_gap_ja$plot
+```
+
+Scale rows show paired-item means and 95% t confidence intervals; the final overall row shows the existing random-scale REML estimate and 95% Wald interval. Blue intervals are entirely negative (LLM higher), orange entirely positive (human higher), and gray include zero. Scale intervals are exploratory and unadjusted for multiple comparisons.
+
+The left panel is the locked comparison. Twenty of the 21 scale means are negative. The right panel compares the Japanese text itself with the original English, and it is a reference. On the published specification curve the hierarchical direct estimate is −0.019 [−0.031, −0.007]. It is not the Hypothesis 4 decision.
+
+### The same sign
+
+Cosine piles up between 0.8 and 1.0. The locked model is fit to the paired difference, not to those two raw scores.
+
+```{r}
+c(
+  human_mean = mean(primary$human),
+  human_median = median(primary$human),
+  llm_mean = mean(primary$llm),
+  llm_median = median(primary$llm)
+)
+beta[beta$comparison == "back_translation", c("mean_difference", "ci_low", "ci_high")]
+c(
+  bootstrap = boot$observed_mean,
+  low = boot$ci_low,
+  high = boot$ci_high,
+  positive_draws = boot$proportion_positive
+)
+stopifnot(boot$proportion_positive == 0)
+```
+
+None of the 10,000 draws has a positive mean. The beta difference is negative as well.
+
+![MPNet checks and the comparison forest](../figures/r_methods_forest.png)
+
+### The embedding was not chosen from this gap
+
+```{r}
+cosine_back <- spec[
+  spec$metric == "cosine" & spec$comparison == "back_translation",
+  c("short_name", "estimate", "ci_low", "ci_high", "analysis_tier")
+]
+cosine_back <- cosine_back[order(match(cosine_back$short_name, c("mpnet", "minilm", "labse", "e5"))), ]
+stopifnot(all(cosine_back$estimate < 0))
+stopifnot(all(spec$sign == "negative"))
+cosine_back
+```
+
+All 24 stored rows are negative: four models, back-translation and direct Japanese, cosine, angular distance, and normalized Euclidean. E5 is closest to zero and stays negative. It is not promoted to the primary instrument.
+
+![Specification curve of the hierarchical cosine estimates](../figures/r_specification_curve.png)
+
+### Exploratory: raw ordinal ratings
+
+The analysis sample has 1,859 citizens. They finished the assigned items and passed the attention check and the speeding check. The straight-lining rule is not used. Item order was randomized, and the presented order was not recorded, so a run computed on the original scale order is not the analysis screen. Experts never used that flag, and they remain 106 people. The 1,211 citizens kept by the three-rule screen are the sensitivity sample.
+
+```{r}
+rating_focus <- raw_ratings[
+  raw_ratings$term %in% c("sim_human", "sim_llm", "x:sim"),
+  c("outcome", "audience", "term", "estimate", "ci_low", "ci_high", "n")
+]
+rating_focus
+```
+
+The coefficients are cumulative log-odds, not changes in rating points. A one-unit predictor change is one standard deviation of similarity. `sim_human` is the human-text slope, `sim_llm` is the LLM-text slope, and `x:sim` is the former minus the latter.
+
+- **Citizen naturalness (13,014 ratings, 1,859 people, 21 scales).** The human slope is −0.137 [−0.361, 0.087], the LLM slope is −0.034 [−0.537, 0.469], and their difference is −0.103 [−0.575, 0.369]. All three intervals include zero. The data therefore do not show that closer back-translations consistently receive higher or lower citizen naturalness ratings, or that this association differs by version.
+- **Expert naturalness (740 ratings, 106 people, 21 scales).** The human slope is +0.293 [−0.015, 0.600], the LLM slope is −0.382 [−1.099, 0.336], and their difference is +0.674 [−0.059, 1.408]. The point estimates differ in direction, but every interval includes zero.
+- **Expert semantic fidelity.** The human slope is +0.057 [−0.234, 0.348], the LLM slope is −0.216 [−0.944, 0.513], and their difference is +0.273 [−0.497, 1.043]. The automatic similarity measure is not detectably associated with higher semantic-fidelity ratings in either version.
+- **Expert cultural-validity item.** The human slope is +0.194 [−0.097, 0.486] and the LLM slope is −0.544 [−1.198, 0.110]; each version-specific interval includes zero. Their difference is +0.739 [0.032, 1.445] and excludes zero. This establishes a difference between slopes, not that either individual slope differs from zero. **Corrected interpretation:** higher exported scores mean better cultural validity. The positive human-minus-LLM interaction therefore means that similarity has a more positive association with cultural validity for the human version than for the LLM version. Because both individual slope intervals include zero, this does not establish a positive human association, a negative LLM association, or higher overall cultural validity for the human version.
+- **Expert choice fit.** The human slope is +0.348 [0.115, 0.580], so closer human back-translations are associated with higher response-option fit ratings. The LLM slope is +0.013 [−0.539, 0.566]. Their difference, +0.334 [−0.255, 0.924], includes zero, so the evidence does not establish that the human association is stronger than the LLM association. A one-SD increase in human scale-mean similarity corresponds to an odds ratio of 1.42 [1.12, 1.79] for a higher rating category. The +0.348 coefficient is a similarity slope, not an intercept or a difference in rating points. Evidence for a positive human simple slope and evidence for a human-versus-LLM slope difference are separate questions.
+
+Thus, cultural validity is the only rating whose human-minus-LLM similarity-slope difference excludes zero. Choice fit has a non-zero human slope but no separated version difference. Distinguishing a simple slope from an interaction is essential here.
+
+![Raw-outcome slopes](../figures/raw_outcome_models_n1859.png)
+
+### Previous difference-score fits
+
+Earlier exploratory files regressed human-minus-LLM rating differences on human-minus-LLM similarity. They are retained for reproducibility and HEEMA/TIVS sensitivity checks, but they are not the current exploratory estimand because both sides of that regression are difference scores.
+
+```{r}
+data.frame(
+  status = "superseded exploratory sensitivity",
+  files = c("judgment_slopes_n1859.csv", "gap_models_n1859.csv")
+)
+```
+
+Those files must not be used to describe the primary exploratory formula.
+
+### Exploratory: token distance
+
+A larger Wasserstein distance means the token clouds are farther apart. Cosine runs the other way, so the predictor flips the distance. Positive then means the human cloud is closer. This table still includes TIVS and uses the three-rule respondent sensitivity sample. It is not the 21-scale, 1,859-citizen analysis-sample slope. The model that enters Wasserstein-1 and Wasserstein-2 together does not replace cosine.
+
+```{r}
+token <- wass[
+  wass$term %in% c("delta_z", "w1_z", "w2_z"),
+  c("outcome", "predictor", "estimate", "ci_low", "ci_high", "includes_zero", "n")
+]
+token
+```
+
+![Cosine and token distance](../figures/r_wasserstein_aic.png)
+
+### Exploratory: flags on a shared similarity
+
+The score is that version's back-translation cosine. One z-score uses the mean and SD of both versions together, on the 483 checkbox items. Zero is the average back-translation. A human point and an LLM point at the same place are equally close to the original. Each line is five quintiles of that version.
+
+| Checkbox | Human quintiles | LLM quintiles |
+| --- | --- | --- |
+| Understandability | 5.7%, 8.8%, 7.6%, 8.0%, 5.2% | 7.9%, 9.6%, 8.7%, 11.3%, 6.1% |
+| Cultural | 2.5%, 2.1%, 2.2%, 2.8%, 2.0% | 2.7%, 3.6%, 2.8%, 4.0%, 2.8% |
+
+The LLM line sits further right. Understandability is higher on that line through the middle, and both lines drop in the closest quintile.
+
+![Quintiles of the shared similarity](../figures/flag_by_similarity.png)
+
+### Exploratory: raw choices and raw expert flags
+
+Preference and the guess are already single binary decisions and are fitted with binomial-logit mixed models. Human and LLM similarity therefore enter together, rather than being subtracted. Among citizens, the preference slopes are −0.208 [−0.448, 0.031] for human similarity and +0.106 [−0.429, 0.642] for LLM similarity. Guess slopes are −0.182 [−0.385, 0.020] and +0.065 [−0.389, 0.518]. All include zero.
+
+Presentation-order effects were also checked for preference and LLM identification. Among citizens, the order coefficient is +0.014 [−0.104, 0.132] for preference and −0.014 [−0.135, 0.107] for identification; both include zero. Among experts, identification is +0.047 [−0.512, 0.607] and includes zero, whereas preference is +0.717 [0.144, 1.290]. Thus experts who saw the LLM translation first had higher odds of preferring the human version (odds ratio 2.05 [1.15, 3.63]). This expert-preference effect is the only one of these four order coefficients whose interval excludes zero. Because it was identified post hoc among several order coefficients, it is a hypothesis-generating exploratory finding rather than a confirmatory result.
+
+Each expert checkbox mark remains a 0/1 outcome in a binomial-logit mixed model. The formula uses effect-coded translation, that translation's own item similarity, respondent- and scale-specific translation effects, an item intercept, and a respondent–item pair intercept.
+
+| Expert flag | Human-text slope | LLM-text slope | Human − LLM slope |
+| --- | ---: | ---: | ---: |
+| Semantic | −0.298 [−0.415, −0.181] | −0.196 [−0.369, −0.023] | −0.102 [−0.294, 0.090] |
+| Understandability | +0.164 [0.039, 0.290] | +0.219 [0.059, 0.379] | −0.055 [−0.229, 0.119] |
+| Cultural | +0.076 [−0.101, 0.252] | +0.318 [0.067, 0.569] | −0.243 [−0.515, 0.030] |
+
+Greater own similarity predicts fewer semantic flags for both translations. Understandability flags rise with own similarity for both translations. Cultural flags rise with LLM similarity, but the human-versus-LLM slope difference still includes zero.
+
+```{r}
+raw_choices[, c("outcome", "audience", "term", "estimate", "ci_low", "ci_high")]
+raw_flags[
+  raw_flags$term %in% c("sim_human", "sim_llm", "x:sim"),
+  c("outcome", "term", "estimate", "ci_low", "ci_high")
+]
+```
+
+### Decision
+
+The upper limit of the confirmatory interval is below zero. The prediction is not supported, and the sign is opposite the prediction. The exploratory table does not change that decision.
+
+## Notes
+
+- The confirmatory steps are in `docs/PIPELINE.md`.
+- The Python walk-through is `notebooks/h4_analysis.ipynb`. The R walk-through is `notebooks/h4_replication.Rmd`.
+- Respondent microdata are not in this HTML. The published objects are coefficients and rates.
+
+
+[Reproduction and coding conventions](../../../docs/reproduce.md)
